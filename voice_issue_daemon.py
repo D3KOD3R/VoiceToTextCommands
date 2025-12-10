@@ -73,7 +73,7 @@ class ConfigLoader:
             raise FileNotFoundError(
                 f"Config not found at {path}. Create it from voice_issues_config.sample.json."
             )
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return VoiceConfig.from_json(data)
 
     @staticmethod
