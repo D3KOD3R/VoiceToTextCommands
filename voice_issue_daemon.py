@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +41,10 @@ class VoiceConfig:
     default_repo: str
     next_issue_phrases: List[str]
     stop_phrases: List[str]
+    stt_provider: str
+    stt_model: Optional[str]
+    stt_binary: Optional[str]
+    stt_language: Optional[str]
 
     @classmethod
     def from_json(cls, data: dict) -> "VoiceConfig":
@@ -46,11 +53,16 @@ class VoiceConfig:
         phrases = data.get("phrases") or {}
         next_issue_phrases = phrases.get("nextIssue") or ["next issue", "next point"]
         stop_phrases = phrases.get("stop") or ["end issues", "stop issues"]
+        stt = data.get("stt") or {}
         return cls(
             repos=repos,
             default_repo=default_repo,
             next_issue_phrases=next_issue_phrases,
             stop_phrases=stop_phrases,
+            stt_provider=stt.get("provider", "stub"),
+            stt_model=stt.get("model"),
+            stt_binary=stt.get("binaryPath"),
+            stt_language=stt.get("language"),
         )
 
 
@@ -134,6 +146,53 @@ class SpeechToTextStub:
         return sys.stdin.read()
 
 
+class WhisperCppProvider:
+    """
+    Local whisper.cpp runner. Requires the whisper.cpp binary and a GGML/GGUF model.
+    Example command pattern:
+        ./main -m ./models/ggml-base.bin -f audio.wav -otxt -of /tmp/out
+    """
+
+    def __init__(self, binary: Path, model: Path, language: Optional[str] = None):
+        self.binary = binary
+        self.model = model
+        self.language = language
+        if not self.binary.exists():
+            raise FileNotFoundError(f"whisper.cpp binary not found at {self.binary}")
+        if not self.model.exists():
+            raise FileNotFoundError(f"whisper.cpp model not found at {self.model}")
+
+    def transcribe_file(self, audio_file: Path) -> str:
+        if not audio_file.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_file}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_base = Path(tmpdir) / "whisper_out"
+            cmd = [
+                str(self.binary),
+                "-m",
+                str(self.model),
+                "-f",
+                str(audio_file),
+                "-otxt",
+                "-of",
+                str(out_base),
+            ]
+            if self.language:
+                cmd.extend(["-l", self.language])
+
+            try:
+                subprocess.run(cmd, check=True, capture_output=True)
+            except subprocess.CalledProcessError as exc:  # noqa: BLE001
+                stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else ""
+                raise RuntimeError(f"whisper.cpp failed: {stderr}") from exc
+
+            out_txt = Path(f"{out_base}.txt")
+            if not out_txt.exists():
+                raise RuntimeError("whisper.cpp did not produce transcription output.")
+            return out_txt.read_text(encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Voice Issue Daemon (skeleton)")
     parser.add_argument(
@@ -147,6 +206,18 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Repo key from config.repos to target (defaults to config.defaultRepo)",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default=None,
+        help="STT provider override (stub|whisper_cpp). Defaults to config.stt.provider.",
+    )
+    parser.add_argument(
+        "--audio-file",
+        type=Path,
+        default=None,
+        help="Path to an audio file to transcribe (wav/m4a/mp3). Overrides --text.",
     )
     parser.add_argument(
         "--text",
@@ -166,8 +237,25 @@ def main() -> int:
         print(f"[error] {exc}", file=sys.stderr)
         return 1
 
-    stt = SpeechToTextStub(provided_text=args.text)
-    transcript = stt.record_and_transcribe()
+    provider = (args.provider or config.stt_provider or "stub").lower()
+
+    if args.text:
+        stt = SpeechToTextStub(provided_text=args.text)
+        transcript = stt.record_and_transcribe()
+    elif provider == "whisper_cpp":
+        try:
+            binary = Path(config.stt_binary or "main").expanduser()
+            model = Path(config.stt_model or "").expanduser()
+            if not args.audio_file:
+                raise ValueError("Provide --audio-file when using provider=whisper_cpp.")
+            stt = WhisperCppProvider(binary=binary, model=model, language=config.stt_language)
+            transcript = stt.transcribe_file(args.audio_file)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[error] STT failed: {exc}", file=sys.stderr)
+            return 1
+    else:
+        stt = SpeechToTextStub()
+        transcript = stt.record_and_transcribe()
     issues = split_issues(transcript, config.next_issue_phrases, config.stop_phrases)
 
     if not issues:

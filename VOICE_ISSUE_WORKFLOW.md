@@ -8,6 +8,7 @@ This repo uses a voice-driven issues file that Codex can consume and update.
 - `scripts/codex_review_issues.sh`: Bash helper for the same flow.
 - `voice_issue_daemon.py`: Python skeleton daemon to capture voice and append issues.
 - `voice_issues_config.sample.json`: starter config for daemon paths/phrases.
+  - By default uses local `whisper.cpp` (no API key). Set `binaryPath` to your built whisper.cpp binary and `model` to a downloaded GGML/GGUF file.
 
 ## Capture Issues by Voice
 You can dry-run the Python skeleton without real STT; it accepts `--text` to simulate transcription.
@@ -18,6 +19,14 @@ Run (simulated input):
 ```
 python voice_issue_daemon.py --text "first issue next issue second issue end issues"
 ```
+
+Run with local whisper.cpp:
+```
+python voice_issue_daemon.py --provider whisper_cpp --audio-file sample.wav
+```
+Requires:
+- `binaryPath` pointing to `main`/`main.exe` from whisper.cpp build
+- `model` pointing to a local GGML/GGUF model (e.g., `ggml-base.bin`)
 
 Expected segmentation:
 - “next issue” starts a new bullet.
