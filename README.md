@@ -17,6 +17,7 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
    - `stt.binaryPath`: path to `main`/`main.exe`.
    - `stt.model`: path to your GGML/GGUF model.
    - `stt.language`: optional (e.g., `en`).
+   - If you just pulled the repo: `git submodule update --init --recursive` to fetch `whisper.cpp`.
 4) Capture issues (from audio):  
    `python voice_issue_daemon.py --provider whisper_cpp --audio-file sample.wav`  
    - Phrases: "next issue" starts a new bullet; "end issues" stops ingestion.  
