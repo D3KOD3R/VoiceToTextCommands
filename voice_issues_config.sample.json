@@ -1,0 +1,12 @@
+{
+  "repos": {
+    "C:/Dev/youtube-banner-agent": {
+      "issuesFile": ".voice/voice-issues.md"
+    }
+  },
+  "defaultRepo": "C:/Dev/youtube-banner-agent",
+  "phrases": {
+    "nextIssue": ["next issue", "next point"],
+    "stop": ["end issues", "stop issues"]
+  }
+}
