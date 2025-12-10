@@ -29,11 +29,21 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 ## Files
 - `.voice/voice-issues.md` — living checklist (voice-captured).
 - `voice_issue_daemon.py` — daemon/CLI to transcribe and append issues.
+- `voice_hotkey_daemon.py` — desktop hotkey recorder (mic → whisper.cpp → issues file).
 - `voice_issues_config.sample.json` — config template for repos/phrases/STT.
 - `scripts/codex_review_issues.ps1` / `scripts/codex_review_issues.sh` — run Codex against the checklist.
 - `VOICE_ISSUE_WORKFLOW.md` — fuller workflow and options.
+- `requirements.txt` — Python deps for hotkey/mic capture.
 
 ## Tips
 - Quick test without audio: `python voice_issue_daemon.py --text "first issue next issue second issue end issues"`.
 - If whisper.cpp binary is not in PATH, set `stt.binaryPath` in `~/.voice_issues_config.json` (e.g., `C:/tools/whisper.cpp/main.exe`).
 - Ensure `.voice/voice-issues.md` is committed so Codex can both read and update it.
+
+## Hotkey desktop capture (Windows)
+1) Install Python deps: `pip install -r requirements.txt`
+2) Ensure whisper.cpp binary/model paths are set in `~/.voice_issues_config.json`.
+3) Run: `python voice_hotkey_daemon.py`  
+   - Start/stop recording: `Ctrl+Alt+I` (default)
+   - Quit: `Ctrl+Alt+Q`
+   - It records mic audio, transcribes via whisper.cpp, segments issues on “next issue” / stops on “end issues”, and appends to `.voice/voice-issues.md`.

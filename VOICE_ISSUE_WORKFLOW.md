@@ -7,6 +7,7 @@ This repo uses a voice-driven issues file that Codex can consume and update.
 - `scripts/codex_review_issues.ps1`: Windows helper to run Codex against the checklist.
 - `scripts/codex_review_issues.sh`: Bash helper for the same flow.
 - `voice_issue_daemon.py`: Python skeleton daemon to capture voice and append issues.
+- `voice_hotkey_daemon.py`: desktop hotkey recorder (Ctrl+Alt+I by default) that records mic, runs whisper.cpp, and appends issues.
 - `voice_issues_config.sample.json`: starter config for daemon paths/phrases.
   - By default uses local `whisper.cpp` (no API key). Set `binaryPath` to your built whisper.cpp binary and `model` to a downloaded GGML/GGUF file.
 
@@ -29,13 +30,13 @@ Requires:
 - `model` pointing to a local GGML/GGUF model (e.g., `ggml-base.bin`)
 
 Expected segmentation:
-- “next issue” starts a new bullet.
-- “end issues” stops ingestion.
+- "next issue" starts a new bullet.
+- "end issues" stops ingestion.
 
 Result: appends to `.voice/voice-issues.md` in the configured repo as unchecked items:
-   ```
-   - [ ] Issue description
-   ```
+```
+- [ ] Issue description
+```
 
 ## Review Issues with Codex
 - PowerShell: `./scripts/codex_review_issues.ps1`
