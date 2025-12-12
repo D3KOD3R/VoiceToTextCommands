@@ -1,5 +1,8 @@
-# Voice Issues  2025-12-10 22:10
-
-- [ ] YouTube banner alignment is off on mobile; respects safe zone across all devices.
-- [ ] Make title font responsive so it always fits *all devices* safe area on YouTube.
-- [ ] Add agent that checks GitHub 100MB limit before generating asset bundles.
+- [x] Split issues pane into pending/completed lists with select-all and delete buttons per pane; pane enlarged ~50% and uses sanitizer so free text and wrapped lines become checklist items visible in the GUI. (pending/completed listboxes added, sanitizer hooked to refresh/delete)
+- [x] Reduced input device row padding/blank space while keeping selection readable. (device row spacing tightened)
+- [x] Removed mic test header label, enlarged microphone waterfall height, and boosted visual level scaling so peaks reach the top during loud input; waterfall shows state for mic test/recording. (canvas taller, level scaling x2.5)
+- [x] Cleaned placeholder/stray issue lines by normalizing the issues file into checklist items. (sanitizer writes normalized bullets)
+- [x] , the issue with, I can't see all of the text for the issue in the issues window, both the completed issues and the pending issues. I want to be able to see all the text. It seems that the text continues to run. I want you to wrap the text for each issue so that it falls inside the issues window. (listboxes now render wrapped lines with indentation; mappings updated so selection/deletion still works)
+- [x] , I want you to consider all of the issues that I've just addressed and I want you to consider all the features. And then I want you to use an expert analysis over my feature set and compare it to best market features that are trending that are similar to these kind of application, voice decoding interfaces and propose features that I haven't already considered in this tool that might be useful to implement as well. (feature proposals listed in latest reply)
+- [ ] The issue is that when I select a issue in the completed issues section, this issue will be the same in the pending issues section. So if I select the split issues pane into pending completed lists with select all and delete buttons, it only selects the first line. So if I select that first issue, it should select the five lines which contain that whole issue in itself. As opposed to just selecting one line from the pane, it should select, if I click one of the issues, it should select all the lines related to that standalone issue.
+- [ ] I'm going to test the video for you. I'm going to test the video for you.

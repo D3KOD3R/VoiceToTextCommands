@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 
-DEFAULT_CONFIG_PATH = Path.home() / ".voice_issues_config.json"
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = REPO_ROOT / ".voice_config.json"
 DEFAULT_HEADER_TITLE = "Voice Issues"
 
 
@@ -45,6 +46,12 @@ class VoiceConfig:
     stt_model: Optional[str]
     stt_binary: Optional[str]
     stt_language: Optional[str]
+    stt_input_samplerate: Optional[int]
+    stt_input_channels: Optional[int]
+    hotkey_toggle: str
+    hotkey_quit: str
+    device_allowlist: List[str]
+    device_denylist: List[str]
 
     @classmethod
     def from_json(cls, data: dict) -> "VoiceConfig":
@@ -54,6 +61,8 @@ class VoiceConfig:
         next_issue_phrases = phrases.get("nextIssue") or ["next issue", "next point"]
         stop_phrases = phrases.get("stop") or ["end issues", "stop issues"]
         stt = data.get("stt") or {}
+        hotkeys = data.get("hotkeys") or {}
+        devices = data.get("devices") or {}
         return cls(
             repos=repos,
             default_repo=default_repo,
@@ -63,6 +72,12 @@ class VoiceConfig:
             stt_model=stt.get("model"),
             stt_binary=stt.get("binaryPath"),
             stt_language=stt.get("language"),
+            stt_input_samplerate=stt.get("inputSamplerate"),
+            stt_input_channels=stt.get("inputChannels"),
+            hotkey_toggle=hotkeys.get("toggle", "ctrl+alt+i"),
+            hotkey_quit=hotkeys.get("quit", "ctrl+alt+q"),
+            device_allowlist=devices.get("allowlist") or [],
+            device_denylist=devices.get("denylist") or [],
         )
 
 
@@ -70,8 +85,14 @@ class ConfigLoader:
     @staticmethod
     def load(path: Path) -> VoiceConfig:
         if not path.exists():
+            legacy = Path.home() / ".voice_issues_config.json"
+            if legacy.exists():
+                data = legacy.read_text(encoding="utf-8-sig")
+                path.write_text(data, encoding="utf-8")
+                print(f"[warn] Migrated legacy config from {legacy} to {path}", file=sys.stderr)
+                return VoiceConfig.from_json(json.loads(data))
             raise FileNotFoundError(
-                f"Config not found at {path}. Create it from voice_issues_config.sample.json."
+                f"Config not found at {path}. Create it from .voice_config.sample.json in the repo."
             )
         data = json.loads(path.read_text(encoding="utf-8-sig"))
         return VoiceConfig.from_json(data)
@@ -82,9 +103,18 @@ class ConfigLoader:
         if not repo_key:
             raise ValueError("No repo selected and no defaultRepo set in config.")
         repo_entry = config.repos.get(repo_key)
+        repo_path = Path(repo_key).expanduser().resolve()
+        if not repo_entry:
+            # Attempt to match by normalized absolute path to avoid separator/format mismatches.
+            for key, val in config.repos.items():
+                try:
+                    if Path(key).expanduser().resolve() == repo_path:
+                        repo_entry = val
+                        break
+                except Exception:
+                    continue
         if not repo_entry or "issuesFile" not in repo_entry:
             raise ValueError(f"Config for repo '{repo_key}' is missing or incomplete.")
-        repo_path = Path(repo_key).expanduser().resolve()
         issues_file = repo_path / repo_entry["issuesFile"]
         return RepoConfig(repo_path=repo_path, issues_file=issues_file)
 
@@ -107,6 +137,14 @@ class IssueWriter:
         with self.issues_file.open("a", encoding="utf-8") as f:
             for issue in cleaned:
                 f.write(f"- [ ] {issue}\n")
+
+
+def append_issues_incremental(writer: IssueWriter, issues: Iterable[str]) -> None:
+    """
+    Write issues one-by-one so each boundary (e.g., 'next issue') persists immediately.
+    """
+    for issue in issues:
+        writer.append_issues([issue])
 
 
 def strip_after_stop(text: str, stop_phrases: List[str]) -> str:
@@ -154,6 +192,11 @@ class WhisperCppProvider:
     """
 
     def __init__(self, binary: Path, model: Path, language: Optional[str] = None):
+        # Prefer whisper-cli.exe if the config still points at main.exe (deprecated wrapper)
+        if binary.name.lower() == "main.exe":
+            alt = binary.with_name("whisper-cli.exe")
+            if alt.exists():
+                binary = alt
         self.binary = binary
         self.model = model
         self.language = language
@@ -166,31 +209,72 @@ class WhisperCppProvider:
         if not audio_file.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
+        def rewrite_wav(src: Path, dest: Path) -> None:
+            import wave  # local import to keep top-level lean
+            with wave.open(str(src), "rb") as r:
+                params = r.getparams()
+                data = r.readframes(params.nframes)
+            with wave.open(str(dest), "wb") as w:
+                w.setnchannels(params.nchannels)
+                w.setsampwidth(params.sampwidth)
+                w.setframerate(params.framerate)
+                w.writeframes(data)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             out_base = Path(tmpdir) / "whisper_out"
-            cmd = [
-                str(self.binary),
-                "-m",
-                str(self.model),
-                "-f",
-                str(audio_file),
-                "-otxt",
-                "-of",
-                str(out_base),
-            ]
-            if self.language:
-                cmd.extend(["-l", self.language])
+            in_path = audio_file
+            attempt = 0
+            while True:
+                attempt += 1
+                cmd = [
+                    str(self.binary),
+                    "-m",
+                    str(self.model),
+                    "-f",
+                    str(in_path),
+                    "-otxt",
+                    "-of",
+                    str(out_base),
+                ]
+                if self.language:
+                    cmd.extend(["-l", self.language])
 
-            try:
-                subprocess.run(cmd, check=True, capture_output=True)
-            except subprocess.CalledProcessError as exc:  # noqa: BLE001
-                stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else ""
-                raise RuntimeError(f"whisper.cpp failed: {stderr}") from exc
+                try:
+                    completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as exc:  # noqa: BLE001
+                    stderr = exc.stderr if exc.stderr else ""
+                    stdout = exc.stdout if exc.stdout else ""
+                    msg = (stderr or stdout).strip() or "unknown error"
+                    # If WAV read failed, rewrite to a fresh PCM16 and retry once.
+                    if "failed to read audio data as wav" in msg.lower() and attempt == 1 and audio_file.suffix.lower() == ".wav":
+                        fixed = Path(tmpdir) / "rewritten.wav"
+                        rewrite_wav(audio_file, fixed)
+                        in_path = fixed
+                        continue
+                    raise RuntimeError(f"whisper.cpp failed: {msg}") from exc
+                else:
+                    # whisper.cpp sometimes prints warnings to stderr even on success; surface them in logs if needed.
+                    if completed.stderr:
+                        err = completed.stderr.strip()
+                        if err:
+                            print(f"[warn] whisper.cpp: {err}", file=sys.stderr)
 
-            out_txt = Path(f"{out_base}.txt")
-            if not out_txt.exists():
-                raise RuntimeError("whisper.cpp did not produce transcription output.")
-            return out_txt.read_text(encoding="utf-8")
+                out_txt = Path(f"{out_base}.txt")
+                if out_txt.exists():
+                    return out_txt.read_text(encoding="utf-8")
+
+                stdout = completed.stdout.strip() if completed and completed.stdout else ""
+                stderr = completed.stderr.strip() if completed and completed.stderr else ""
+                # If output missing after first attempt and we haven't rewritten, try a rewrite once.
+                if attempt == 1 and audio_file.suffix.lower() == ".wav":
+                    fixed = Path(tmpdir) / "rewritten.wav"
+                    rewrite_wav(audio_file, fixed)
+                    in_path = fixed
+                    continue
+                raise RuntimeError(
+                    "whisper.cpp did not produce transcription output. "
+                    f"stdout: {stdout or '∅'} | stderr: {stderr or '∅'}"
+                )
 
 
 def parse_args() -> argparse.Namespace:
@@ -199,7 +283,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help="Path to voice issues config (default: ~/.voice_issues_config.json)",
+        help="Path to voice issues config (default: .voice_config.json in repo)",
     )
     parser.add_argument(
         "--repo",
@@ -263,7 +347,7 @@ def main() -> int:
         return 0
 
     writer = IssueWriter(repo_cfg.issues_file)
-    writer.append_issues(issues)
+    append_issues_incremental(writer, issues)
 
     print(f"[ok] Appended {len(issues)} issue(s) to {repo_cfg.issues_file}")
     return 0

@@ -1,0 +1,28 @@
+{
+  "repos": {
+    "/absolute/path/to/VoiceToTextCommands": {
+      "issuesFile": ".voice/voice-issues.md"
+    }
+  },
+  "defaultRepo": "/absolute/path/to/VoiceToTextCommands",
+  "hotkeys": {
+    "toggle": "ctrl+alt+i",
+    "quit": "ctrl+alt+q"
+  },
+  "devices": {
+    "allowlist": [],
+    "denylist": []
+  },
+  "phrases": {
+    "nextIssue": ["next issue", "next point"],
+    "stop": ["end issues", "stop issues"]
+  },
+    "stt": {
+        "provider": "whisper_cpp",
+        "binaryPath": ".tools/whisper/whisper-cli.exe",
+        "model": ".tools/whisper/ggml-base.en.bin",
+        "language": "en",
+        "inputSamplerate": null,
+        "inputChannels": null
+    }
+}

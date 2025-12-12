@@ -1,8 +1,9 @@
-# "Merge to Main" Workflow
+# MergeAgent — "Merge to Main" Workflow
 
 The repo domain can be found in a file called RepoPointer.md use this for branch pushes. 
 
 When the user says "merge to main", follow this complete workflow:
+Always acknowledge this workflow before merge-related work; do not skip it.
 
 ## Pre-Merge Preparation
 1. **Pull latest main** - Fetch and merge the latest changes from remote main.
@@ -50,3 +51,6 @@ When the user says "merge to main", follow this complete workflow:
 - **If merge conflicts exist**: Report conflicts and ask user to resolve manually.
 - **If PR creation fails**: Report error and suggest manual creation.
 - **If CI/CD fails**: Report failures and ask whether to fix or abort.
+
+## Readme
+- ** If there are dependencies that need to be installed first link the url of the dependencies in the readme in the sequential order of installation. 
