@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
 AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
 REPO_HISTORY_LIMIT = 12
+PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -492,6 +493,11 @@ class VoiceGUI:
         ttk.Button(move_all_row, text="Pending", command=self._mark_any_pending).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
+        ttk.Checkbutton(
+            move_all_row,
+            text="Skip delete confirmation",
+            variable=self.skip_delete_confirm,
+        ).pack(side=LEFT, padx=(4, 0))
 
     def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
         column = ttk.Frame(parent, padding=(4, 0, 0, 0))
@@ -544,14 +550,25 @@ class VoiceGUI:
         self.test_cta_btn = ttk.Button(parent, text="Test Selected Mic", command=self.toggle_mic_test)
         self.test_cta_btn.pack(fill=BOTH, padx=10, pady=(4, 4))
 
-        hk_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
+        columns = ttk.Frame(parent)
+        columns.pack(fill=BOTH, expand=True, **pad)
+        columns.columnconfigure(0, weight=3)
+        columns.columnconfigure(1, weight=2)
+
+        left_col = ttk.Frame(columns)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        right_col = ttk.Frame(columns)
+        right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        right_col.columnconfigure(0, weight=1)
+
+        hk_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
         ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
         ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
 
-        path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
+        path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         path_row.pack(fill=BOTH, **pad)
         ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
         repo_values = list(self.repo_history)
@@ -571,7 +588,7 @@ class VoiceGUI:
         ttk.Button(path_row, text="Browse...", width=8, command=self._browse_repo_path).pack(side=LEFT, padx=(0, 6))
         self._update_repo_combo_values(current_repo=self.repo_cfg.repo_path)
 
-        issue_path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
+        issue_path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
@@ -581,30 +598,34 @@ class VoiceGUI:
             width=16,
             command=self._create_voice_file_for_selected_repo,
         ).pack(side=LEFT, padx=(0, 6))
-        apply_btn = ttk.Button(parent, text="Apply settings", command=self._apply_settings, width=18)
-        apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
-        info_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
-        info_row.pack(fill=BOTH, **pad)
-        self.static_info_label = ttk.Label(info_row, text=self._static_info_text(), justify=LEFT)
-        self.static_info_label.pack(anchor="w")
 
-        device_row = ttk.Frame(parent, padding=(2, 1, 2, 1))
+        apply_btn = ttk.Button(left_col, text="Apply settings", command=self._apply_settings, width=18)
+        apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
+
+        self.static_info_label = ttk.Label(right_col, text=self._static_info_text(), justify=LEFT, anchor="nw")
+        self.static_info_label.pack(fill=BOTH, expand=True, padx=(6, 4), pady=(2, 0))
+
+        device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
-        ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
+        device_row.columnconfigure(0, weight=0)
+        device_row.columnconfigure(1, weight=4)
+        device_row.columnconfigure(2, weight=1)
+        ttk.Label(device_row, text="Input device:").grid(row=0, column=0, sticky="w", padx=(0, 6))
         values = [f"{d['id']}: {d['name']}" for d in self.device_list]
         self.device_combo = ttk.Combobox(
             device_row,
             values=values,
             state="readonly",
-            width=45,
+            width=32,
         )
+        self.device_combo.grid(row=0, column=1, sticky="ew", padx=(0, 6))
         if self.device_list:
             self.device_combo.current(0)
             self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-        self.device_combo.pack(side=LEFT, padx=(4, 6), fill="x", expand=True)
-        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).grid(row=0, column=2, sticky="e", padx=(0, 6))
         self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
-        self.live_indicator.pack(side=LEFT, padx=(4, 0))
+        self.live_indicator.grid(row=0, column=3, sticky="e", padx=(0, 0))
+        self._refresh_static_info()
 
     def _build_live_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         parent.columnconfigure(0, weight=1)
@@ -644,11 +665,6 @@ class VoiceGUI:
         self._build_issue_column(lists_row, "Completed issues:", "done")
         self._build_issue_column(lists_row, "Waitlist issues:", "wait")
 
-        ttk.Checkbutton(
-            panel,
-            text="Skip delete confirmation",
-            variable=self.skip_delete_confirm,
-        ).pack(anchor="w", pady=(2, 0))
 
     def _log(self, msg: str) -> None:
         if not self.log_widget:
@@ -1349,12 +1365,33 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Could not persist repo history: {exc}")
 
+    def _append_repo_history_md(self, repo_path: str) -> None:
+        try:
+            PAST_REPOS_MD.parent.mkdir(parents=True, exist_ok=True)
+            entry = f"- {repo_path}"
+            if PAST_REPOS_MD.exists():
+                existing = [line.strip() for line in PAST_REPOS_MD.read_text(encoding="utf-8").splitlines() if line.strip()]
+            else:
+                existing = []
+            if entry in existing:
+                return
+            with PAST_REPOS_MD.open("a", encoding="utf-8") as fh:
+                if existing:
+                    fh.write("\n")
+                fh.write(entry)
+                fh.write("\n")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Could not update past repo list: {exc}")
+
     def _record_repo_history(self, repo_path: Path) -> None:
         repo_str = str(repo_path)
+        seen_before = repo_str in self.repo_history
         history = [repo_str] + [p for p in self.repo_history if p != repo_str]
         self.repo_history = history[:REPO_HISTORY_LIMIT]
         self._persist_repo_history()
         self._update_repo_combo_values(current_repo=repo_path)
+        if not seen_before:
+            self._append_repo_history_md(repo_str)
 
     def _update_repo_combo_values(self, current_repo: Path | None = None) -> None:
         combo = self.repo_combo

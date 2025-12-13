@@ -2,3 +2,7 @@
 - [x] Display static strings for the hotkeys, repo path, and issues file path so the user can see them update when they change inputs. (Added a static info row under Apply Settings that lists the toggle/quit combos, repo, and issues path.)
 - [x] Keep the live speech output window empty until a future playback server is wired; do not append realtime/local transcripts there. (Stopped writing transcripts into that widget and dedicated the pane to future uses.)
 - [x] Remove the level meter since it duplicates the microphone waterfall view. (Dropped the level canvas/frame and `_draw_level_bar` calls so only the waterfall remains.)
+- [x] I want each of these lines to be a column, with the static strings sitting to the right. (Rebuilt the settings panel into left/right columns so the hotkey/repo rows stay left and the static info column stays right.)
+- [x] The input device field should only span about 40% of the width. (The device combobox now sits inside a grid row with controlled weights so it remains about 40% width with the refresh button beside it.)
+- [x] Move the “Skip delete confirmation” checkbox next to the Waitlist button so it remains visible when the window shrinks. (The checkbox now sits in the move-row beside the Waitlist action.)
+- [x] Persist past repo selections to a Markdown list so the dropdown shows previously chosen paths. (Appends each new repo to `.voice/past_repos.md` whenever a repo is recorded.)
