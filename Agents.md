@@ -12,4 +12,5 @@ Order of consultation:
 7) `agents/AgentUi.md` — desktop UI specifics
 8) `agents/AgentTest.md` — testing & verification
 9) `agents/AgentFeatures.md` — features catalog
-10) `agents/MergeAgent.md` — merge/review guidance
+10) `agents/AgentBug.md` — bug/issue tracking workflow
+11) `agents/MergeAgent.md` — merge/review guidance
