@@ -612,6 +612,24 @@ class VoiceGUI:
         self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
         self.stop_btn.pack(in_=btn_row, side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
 
+    def _build_issues_panel(self, parent: ttk.Frame) -> None:
+        panel = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        panel.pack(fill=BOTH, expand=True)
+        self._build_move_buttons(panel)
+
+        lists_row = ttk.Frame(panel)
+        lists_row.pack(fill=BOTH, expand=True)
+
+        self._build_issue_column(lists_row, "Pending issues:", "pending")
+        self._build_issue_column(lists_row, "Completed issues:", "done")
+        self._build_issue_column(lists_row, "Waitlist issues:", "wait")
+
+        ttk.Checkbutton(
+            panel,
+            text="Skip delete confirmation",
+            variable=self.skip_delete_confirm,
+        ).pack(anchor="w", pady=(2, 0))
+
     def _log(self, msg: str) -> None:
         if not self.log_widget:
             return
