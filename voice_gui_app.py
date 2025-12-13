@@ -551,8 +551,11 @@ class VoiceGUI:
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
+        waterfall_frame = ttk.Frame(audio_block)
+        waterfall_frame.pack(fill=BOTH, expand=True, pady=(0, 5))
+        waterfall_frame.pack_propagate(False)
         self.test_canvas.config(height=320)
-        self.test_canvas.pack(in_=audio_block, fill=BOTH, expand=True, pady=(0, 5))
+        self.test_canvas.pack(in_=waterfall_frame, fill=BOTH, expand=True)
 
         btn_row = ttk.Frame(self.controls_frame)
         btn_row.pack(fill=BOTH, **pad)
