@@ -442,6 +442,8 @@ class VoiceGUI:
         self.waterfall_status: ttk.Label | None = None
         self.transcript_widget: scrolledtext.ScrolledText | None = None
         self.transcript_listener: TranscriptListener | None = None
+        self.realtime_proc: subprocess.Popen | None = None
+        self.realtime_status_var = StringVar(value="Server: stopped")
         self.info_label: ttk.Label | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
@@ -608,7 +610,12 @@ class VoiceGUI:
 
         transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
+        header_row = ttk.Frame(transcript_frame)
+        header_row.pack(fill=BOTH, expand=False)
+        ttk.Label(header_row, text="Speech output (from server):").pack(side=LEFT, padx=(0, 6))
+        ttk.Button(header_row, text="Start server", command=self._start_realtime_server).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(header_row, text="Stop server", command=self._stop_realtime_server).pack(side=LEFT, padx=(0, 4))
+        ttk.Label(header_row, textvariable=self.realtime_status_var).pack(side=LEFT, padx=(6, 0))
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
@@ -657,6 +664,55 @@ class VoiceGUI:
             on_log=lambda m: self.root.after(0, lambda: self._log(m)),
         )
         self.transcript_listener.start()
+
+    def _start_realtime_server(self) -> None:
+        if self.realtime_proc and self.realtime_proc.poll() is None:
+            self._log("[info] Realtime server already running.")
+            return
+        try:
+            cmd = [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "speech_server:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000",
+            ]
+            self.realtime_proc = subprocess.Popen(cmd, cwd=ROOT)
+            self.realtime_status_var.set("Server: starting...")
+            self._log("[info] Starting realtime server on http://localhost:8000")
+            self.root.after(2000, self._refresh_realtime_status)
+        except FileNotFoundError:
+            self._log("[error] Cannot start server: Python or uvicorn not found.")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to start realtime server: {exc}")
+
+    def _refresh_realtime_status(self) -> None:
+        if self.realtime_proc and self.realtime_proc.poll() is None:
+            self.realtime_status_var.set("Server: running (localhost:8000)")
+        else:
+            self.realtime_status_var.set("Server: stopped")
+
+    def _stop_realtime_server(self) -> None:
+        if not self.realtime_proc:
+            self.realtime_status_var.set("Server: stopped")
+            return
+        proc = self.realtime_proc
+        self.realtime_proc = None
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
+            self._log("[info] Realtime server stopped.")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to stop server cleanly: {exc}")
+        finally:
+            self.realtime_status_var.set("Server: stopped")
 
     def _send_transcript_to_server(self, text: str) -> None:
         if not text or not self.config.realtime_post_url:
@@ -1542,6 +1598,10 @@ class VoiceGUI:
         try:
             if self.transcript_listener:
                 self.transcript_listener.stop()
+        except Exception:
+            pass
+        try:
+            self._stop_realtime_server()
         except Exception:
             pass
         try:
