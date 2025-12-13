@@ -1,0 +1,4 @@
+- [x] When a new repo is created, the application should expose a button near the issues file path so it can spin up the `.voice/voice-issues.md` in that repo’s `.voice` folder. (Added “Create voice file” next to the issues entry to bootstrap the `.voice` folder and issues file via `IssueWriter`/`_ensure_repo_voice_assets`.)
+- [x] Display static strings for the hotkeys, repo path, and issues file path so the user can see them update when they change inputs. (Added a static info row under Apply Settings that lists the toggle/quit combos, repo, and issues path.)
+- [x] Keep the live speech output window empty until a future playback server is wired; do not append realtime/local transcripts there. (Stopped writing transcripts into that widget and dedicated the pane to future uses.)
+- [x] Remove the level meter since it duplicates the microphone waterfall view. (Dropped the level canvas/frame and `_draw_level_bar` calls so only the waterfall remains.)

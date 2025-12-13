@@ -455,6 +455,7 @@ class VoiceGUI:
         self.device_combo: ttk.Combobox | None = None
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
+        self.static_info_label: ttk.Label | None = None
 
         self._build_layout()
         self._ensure_keyboard_module()
@@ -574,8 +575,18 @@ class VoiceGUI:
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
+        ttk.Button(
+            issue_path_row,
+            text="Create voice file",
+            width=16,
+            command=self._create_voice_file_for_selected_repo,
+        ).pack(side=LEFT, padx=(0, 6))
         apply_btn = ttk.Button(parent, text="Apply settings", command=self._apply_settings, width=18)
         apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
+        info_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
+        info_row.pack(fill=BOTH, **pad)
+        self.static_info_label = ttk.Label(info_row, text=self._static_info_text(), justify=LEFT)
+        self.static_info_label.pack(anchor="w")
 
         device_row = ttk.Frame(parent, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
@@ -719,7 +730,7 @@ class VoiceGUI:
             wrapped = textwrap.wrap(text, width=wrap_width) or [text]
             for j, line in enumerate(wrapped):
                 if j == 0:
-                    display = f"{idx + 1}. {line}"
+                    display = f"[{idx + 1}] {line}"
                 else:
                     display = f"   {line}"
                 listbox.insert(END, display)
@@ -1213,13 +1224,8 @@ class VoiceGUI:
     def _apply_settings(self) -> None:
         toggle = self.hotkey_toggle_var.get().strip()
         quit_key = self.hotkey_quit_var.get().strip()
-        repo_raw = self.repo_path_var.get().strip()
-        issues_raw = self.issues_path_var.get().strip()
         try:
-            repo_path = Path(repo_raw).expanduser().resolve()
-            issues_path = Path(issues_raw).expanduser()
-            if not issues_path.is_absolute():
-                issues_path = (repo_path / issues_path).resolve()
+            repo_path, issues_path = self._resolve_repo_and_issues()
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Invalid paths: {exc}")
             return
@@ -1270,8 +1276,41 @@ class VoiceGUI:
             self._register_hotkeys()
             self._refresh_issue_list()
             self._log(f"[ok] Settings updated and saved to {DEFAULT_CONFIG_PATH}")
+            self._refresh_static_info()
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to apply settings: {exc}")
+
+    def _resolve_repo_and_issues(self) -> tuple[Path, Path]:
+        repo_raw = self.repo_path_var.get().strip()
+        issues_raw = self.issues_path_var.get().strip()
+        repo_path = Path(repo_raw).expanduser().resolve()
+        issues_path = Path(issues_raw).expanduser()
+        if not issues_path.is_absolute():
+            issues_path = (repo_path / issues_path).resolve()
+        return repo_path, issues_path
+
+    def _create_voice_file_for_selected_repo(self) -> None:
+        try:
+            repo_path, issues_path = self._resolve_repo_and_issues()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Invalid paths: {exc}")
+            return
+        self._ensure_repo_voice_assets(repo_path, issues_path)
+        self._record_repo_history(repo_path)
+        self.repo_path_var.set(str(repo_path))
+        self.issues_path_var.set(str(issues_path))
+        self._refresh_static_info()
+        self._log(f"[ok] Created voice issues file at {issues_path}")
+
+    def _static_info_text(self) -> str:
+        return (
+            f"Hotkeys: toggle {self.hotkey_toggle_var.get()} | quit {self.hotkey_quit_var.get()} | "
+            f"Repo: {self.repo_path_var.get()} | Issues: {self.issues_path_var.get()}"
+        )
+
+    def _refresh_static_info(self) -> None:
+        if self.static_info_label:
+            self.static_info_label.config(text=self._static_info_text())
 
     def _browse_repo_path(self) -> None:
         try:
