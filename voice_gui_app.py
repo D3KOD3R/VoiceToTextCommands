@@ -640,20 +640,30 @@ class VoiceGUI:
         self._drag_info = {"source": source, "entry_idx": entry_idx}
 
     def _finish_drag(self, event, target: str) -> None:
+        """
+        Complete a drag-drop move between listboxes. Target bucket is resolved from the widget under the cursor.
+        """
         if not self._drag_info:
             return
         info = self._drag_info
         self._drag_info = None
         source = info.get("source")
         entry_idx = info.get("entry_idx")
-        if source == target or entry_idx is None:
+        if entry_idx is None:
             return
+
+        # Resolve drop target from the widget under the cursor to allow cross-list drags.
+        drop_widget = self.root.winfo_containing(event.x_root, event.y_root)
+        resolved_target = self._bucket_for_widget(drop_widget) or target
+        if source == resolved_target:
+            return
+
         entries = self._entries_for_source(source)
         if entries is None or not (0 <= entry_idx < len(entries)):
             return
         idx_list, _ = entries[entry_idx]
         targets = set(idx_list)
-        state_char = self._state_char_for_target(target)
+        state_char = self._state_char_for_target(resolved_target)
         if state_char is None:
             return
         try:
@@ -669,7 +679,7 @@ class VoiceGUI:
                 text += "\n"
             self.repo_cfg.issues_file.write_text(text, encoding="utf-8")
             self._refresh_issue_list()
-            self._log(f"[ok] Dragged {len(targets)} issue(s) to {target}")
+            self._log(f"[ok] Dragged {len(targets)} issue(s) to {resolved_target}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to move issue(s): {exc}")
 
@@ -698,6 +708,15 @@ class VoiceGUI:
             return "x"
         if target == "wait":
             return WAIT_STATE_CHAR
+        return None
+
+    def _bucket_for_widget(self, widget) -> str | None:
+        if widget in (self.issue_listbox,):
+            return "pending"
+        if widget in (self.issue_listbox_done,):
+            return "done"
+        if widget in (self.issue_listbox_wait,):
+            return "wait"
         return None
 
     def _expand_issue_selection(self, listbox: Listbox | None, row_map: list[int]) -> None:
