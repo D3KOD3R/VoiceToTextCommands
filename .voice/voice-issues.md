@@ -6,3 +6,5 @@
 - [x] The input device field should only span about 40% of the width. (The device combobox now sits inside a grid row with controlled weights so it remains about 40% width with the refresh button beside it.)
 - [x] Move the “Skip delete confirmation” checkbox next to the Waitlist button so it remains visible when the window shrinks. (The checkbox now sits in the move-row beside the Waitlist action.)
 - [x] Persist past repo selections to a Markdown list so the dropdown shows previously chosen paths. (Appends each new repo to `.voice/past_repos.md` whenever a repo is recorded.)
+- [x] When the user changes a repo path and then selects create voice file, the voice file is created inside a `.voice` folder in that selected repo. (The button now resets the issues path to `repo/.voice/voice-issues.md` before creating the file.)
+- [x] The static items (hotkeys/repo/issues path) now appear in a vertical column with separate rows instead of in one concatenated label. (Each static item gets its own label in the right column that updates when settings change.)

@@ -602,8 +602,12 @@ class VoiceGUI:
         apply_btn = ttk.Button(left_col, text="Apply settings", command=self._apply_settings, width=18)
         apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
 
-        self.static_info_label = ttk.Label(right_col, text=self._static_info_text(), justify=LEFT, anchor="nw")
-        self.static_info_label.pack(fill=BOTH, expand=True, padx=(6, 4), pady=(2, 0))
+        self.hotkey_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
+        self.hotkey_info_label.pack(fill="x", padx=(6, 4), pady=(2, 1))
+        self.repo_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
+        self.repo_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
+        self.issues_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
+        self.issues_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
 
         device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
@@ -1307,10 +1311,12 @@ class VoiceGUI:
 
     def _create_voice_file_for_selected_repo(self) -> None:
         try:
-            repo_path, issues_path = self._resolve_repo_and_issues()
+            repo_path, _ = self._resolve_repo_and_issues()
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Invalid paths: {exc}")
             return
+        issues_path = repo_path / ".voice" / "voice-issues.md"
+        self.issues_path_var.set(str(issues_path))
         self._ensure_repo_voice_assets(repo_path, issues_path)
         self._record_repo_history(repo_path)
         self.repo_path_var.set(str(repo_path))
@@ -1318,15 +1324,21 @@ class VoiceGUI:
         self._refresh_static_info()
         self._log(f"[ok] Created voice issues file at {issues_path}")
 
-    def _static_info_text(self) -> str:
+    def _static_info_text(self) -> tuple[str, str, str]:
         return (
-            f"Hotkeys: toggle {self.hotkey_toggle_var.get()} | quit {self.hotkey_quit_var.get()} | "
-            f"Repo: {self.repo_path_var.get()} | Issues: {self.issues_path_var.get()}"
+            f"Hotkeys: toggle {self.hotkey_toggle_var.get()} | quit {self.hotkey_quit_var.get()}",
+            f"Repo: {self.repo_path_var.get()}",
+            f"Issues: {self.issues_path_var.get()}",
         )
 
     def _refresh_static_info(self) -> None:
-        if self.static_info_label:
-            self.static_info_label.config(text=self._static_info_text())
+        hotkey_text, repo_text, issues_text = self._static_info_text()
+        if self.hotkey_info_label:
+            self.hotkey_info_label.config(text=hotkey_text)
+        if self.repo_info_label:
+            self.repo_info_label.config(text=repo_text)
+        if self.issues_info_label:
+            self.issues_info_label.config(text=issues_text)
 
     def _browse_repo_path(self) -> None:
         try:

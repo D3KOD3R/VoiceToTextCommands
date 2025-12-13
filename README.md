@@ -9,6 +9,8 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - GUI recorder with mic selection and live level (whisper.cpp backend).
 - GUI mic test with waterfall meter to confirm the mic is working.
 - Manage issue states in the GUI (mark pending as done, undo completed items, delete, waitlist bucket with drag/drop, skip delete confirms, and wrap long text).
+- Settings panel now lists the configured hotkeys, repo path, and issues file in a static column, offers a one-click **Create voice file** helper, and keeps the inputs grouped in left/right columns that match the mockup.
+- The repo picker remembers past selections in `.voice/past_repos.md`, so previously used repositories reappear in the dropdown without retyping.
 - Optional realtime transcript relay server (FastAPI/Docker) that feeds a speech output window in the GUI.
 - Hotkey daemon for quick capture via whisper.cpp.
 - Optional GitHub bridge: push unchecked voice issues to GitHub using the `gh` CLI.
