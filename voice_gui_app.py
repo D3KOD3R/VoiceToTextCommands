@@ -412,7 +412,7 @@ class VoiceGUI:
         pad = {"padx": 8, "pady": 4}
 
         # Controls block (everything above the log)
-        self.controls_frame.pack(fill=BOTH, expand=True)
+        self.controls_frame.pack(fill=BOTH, expand=False)
 
         header = ttk.Frame(self.controls_frame)
         header.pack(fill=BOTH, **pad)
@@ -524,11 +524,8 @@ class VoiceGUI:
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
         ttk.Button(issue_path_row, text="Apply settings", command=self._apply_settings).pack(side=LEFT)
 
-        audio_block = ttk.Frame(self.controls_frame, padding=(6, 0, 6, 4))
-        audio_block.pack(fill=BOTH, expand=True)
-
-        device_row = ttk.Frame(audio_block, padding=(2, 1, 2, 1))
-        device_row.pack(fill="x", expand=False, pady=(0, 4))
+        device_row = ttk.Frame(self.controls_frame, padding=(2, 1, 2, 1))
+        device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
         if self.device_list:
             self.device_combo.current(0)
@@ -538,21 +535,21 @@ class VoiceGUI:
         ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
         self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
 
-        test_row = ttk.Frame(audio_block, padding=(6, 4, 6, 4))
-        test_row.pack(fill=BOTH)
+        test_row = ttk.Frame(self.controls_frame, padding=(6, 4, 6, 4))
+        test_row.pack(fill=BOTH, **pad)
         self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
 
-        meter_row = ttk.Frame(audio_block)
-        meter_row.pack(fill=BOTH, pady=(2, 2))
+        meter_row = ttk.Frame(self.controls_frame)
+        meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
         self.level_canvas.pack(in_=meter_row, side=LEFT, padx=(0, 0))
 
-        wf_header = ttk.Frame(audio_block)
-        wf_header.pack(fill=BOTH, pady=(4, 0))
+        wf_header = ttk.Frame(self.controls_frame)
+        wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
         self.test_canvas.config(height=280)
-        self.test_canvas.pack(in_=audio_block, fill=BOTH, expand=True, pady=(0, 5))
+        self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
 
         btn_row = ttk.Frame(self.controls_frame)
         btn_row.pack(fill=BOTH, **pad)
