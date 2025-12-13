@@ -54,6 +54,7 @@ class VoiceConfig:
     device_denylist: List[str]
     realtime_ws_url: Optional[str]
     realtime_post_url: Optional[str]
+    realtime_auto_start: bool
 
     @classmethod
     def from_json(cls, data: dict) -> "VoiceConfig":
@@ -83,6 +84,7 @@ class VoiceConfig:
             device_denylist=devices.get("denylist") or [],
             realtime_ws_url=realtime.get("wsUrl"),
             realtime_post_url=realtime.get("postUrl"),
+            realtime_auto_start=bool(realtime.get("autoStart", False)),
         )
 
 

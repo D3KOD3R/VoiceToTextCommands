@@ -46,7 +46,7 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - Or build/run via Docker:  
   `docker build -f Dockerfile.speech-server -t voice-transcript-server .`  
   `docker run --rm -p 8000:8000 voice-transcript-server`
-- GUI can start/stop the server: use the “Start server” / “Stop server” buttons in the Speech output panel; requires `uvicorn` installed (provided via `requirements.txt`).
+- GUI can start/stop the server: use the “Start server” / “Stop server” buttons in the Speech output panel; requires `uvicorn` installed (provided via `requirements.txt`). Set `"realtime.autoStart": true` to launch on GUI start.
 - Configure the GUI to listen/post in `.voice_config.json` (defaults are `ws://localhost:8000/ws` and `http://localhost:8000/transcript` under `"realtime"`).
 - The GUI speech output window will show any transcript strings posted to `/transcript`; it reconnects automatically if the server restarts.
 
