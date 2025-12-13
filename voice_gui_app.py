@@ -433,6 +433,7 @@ class VoiceGUI:
         self.issue_entries_pending: list[tuple[list[int], str]] = []
         self.issue_entries_done: list[tuple[list[int], str]] = []
         self.issue_entries_wait: list[tuple[list[int], str]] = []
+        self.issue_header_labels: dict[str, tuple[ttk.Label, str]] = {}
         self.pending_row_map: list[int] = []
         self.done_row_map: list[int] = []
         self.wait_row_map: list[int] = []
@@ -500,7 +501,9 @@ class VoiceGUI:
     def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
         column = ttk.Frame(parent, padding=(4, 0, 0, 0))
         column.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(column, text=label).pack(anchor="w")
+        base_label = f"{label.strip(':')}:"
+        header = ttk.Label(column, text=f"{base_label} [0]")
+        header.pack(anchor="w")
         listbox = Listbox(
             column,
             height=16,
@@ -517,6 +520,7 @@ class VoiceGUI:
         else:
             self.issue_listbox_wait = listbox
             listbox.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
+        self.issue_header_labels[bucket] = (header, base_label)
         listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._start_drag(e, b))
         listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
 
@@ -554,7 +558,8 @@ class VoiceGUI:
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
-        ttk.Button(issue_path_row, text="Apply settings", command=self._apply_settings).pack(side=LEFT)
+        apply_btn = ttk.Button(parent, text="Apply settings", command=self._apply_settings)
+        apply_btn.pack(fill=BOTH, padx=10, pady=(0, 6))
 
         device_row = ttk.Frame(parent, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
@@ -575,11 +580,6 @@ class VoiceGUI:
         self.live_indicator.pack(side=LEFT, padx=(4, 0))
 
     def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        test_row = ttk.Frame(parent, padding=(6, 4, 6, 4))
-        test_row.pack(fill=BOTH, **pad)
-        self.test_btn = ttk.Button(test_row, text="Test Selected Mic", command=self.toggle_mic_test)
-        self.test_btn.pack(side=LEFT, padx=(0, 10), pady=2)
-
         meter_row = ttk.Frame(parent)
         meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
         self.level_canvas = Canvas(meter_row, width=40, height=80, bg="#1e1e1e", highlightthickness=0)
@@ -596,7 +596,7 @@ class VoiceGUI:
     def _build_transcript_panel(self, parent: ttk.Frame) -> None:
         transcript_frame = ttk.Frame(parent, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
+        ttk.Label(transcript_frame, text="Speech output:").pack(anchor="w")
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
@@ -703,6 +703,9 @@ class VoiceGUI:
                 self.issue_listbox_wait.delete(0, END)
                 self.wait_row_map = []
                 self._populate_issue_listbox(self.issue_listbox_wait, wait, self.wait_row_map)
+            self._update_issue_header("pending", len(pending))
+            self._update_issue_header("done", len(done))
+            self._update_issue_header("wait", len(wait))
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Unable to read issues file {self.repo_cfg.issues_file}: {exc}")
 
@@ -714,6 +717,13 @@ class VoiceGUI:
                 display = line if j == 0 else f"   {line}"
                 listbox.insert(END, display)
                 row_map.append(idx)
+
+    def _update_issue_header(self, bucket: str, count: int) -> None:
+        entry = self.issue_header_labels.get(bucket)
+        if not entry:
+            return
+        widget, base_label = entry
+        widget.config(text=f"{base_label} [{count}]")
 
     def _on_pending_select(self, event=None) -> None:  # type: ignore[override]
         self._expand_issue_selection(self.issue_listbox, self.pending_row_map)
@@ -1229,6 +1239,8 @@ class VoiceGUI:
             self._log(f"[info] Using recording {self.tmp_wav.name} ({dur:.2f}s)")
             transcript = transcribe_with_whisper_cpp(self.tmp_wav, self.config)
             self._send_transcript_to_server(transcript)
+            if transcript.strip():
+                self._append_transcript(f"[local] {transcript.strip()}")
             issues = split_issues(transcript, self.config.next_issue_phrases, self.config.stop_phrases)
             if not issues:
                 self._log("[info] No issues detected.")

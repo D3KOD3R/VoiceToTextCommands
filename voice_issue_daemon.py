@@ -28,6 +28,7 @@ from typing import Iterable, List, Optional
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = REPO_ROOT / ".voice_config.json"
 DEFAULT_HEADER_TITLE = "Voice Issues"
+ISSUE_NUMBER_PATTERN = re.compile(r"\bissue\s+(?:number\s+)?(\d+)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -164,12 +165,17 @@ def split_issues(text: str, next_phrases: List[str], stop_phrases: List[str]) ->
     text = strip_after_stop(text, stop_phrases)
     if not text.strip():
         return []
-    if next_phrases:
-        separator = "|".join(re.escape(p) for p in next_phrases)
-        parts = re.split(separator, text, flags=re.IGNORECASE)
-    else:
-        parts = [text]
-    issues = [part.strip(" .;-") for part in parts if part.strip(" .;-")]
+    marker = "__ISSUE_BOUNDARY__"
+
+    def _inject_boundary(match: re.Match[str]) -> str:
+        return f"{marker} {match.group(0)}"
+
+    text = ISSUE_NUMBER_PATTERN.sub(_inject_boundary, text)
+    separators = [re.escape(p) for p in next_phrases if p and p.strip()]
+    separators.append(re.escape(marker))
+    pattern = "|".join(separators)
+    parts = re.split(pattern, text, flags=re.IGNORECASE) if pattern else [text]
+    issues = [part.strip(" .;-") for part in parts if part and part.strip(" .;-")]
     return issues
 
 
