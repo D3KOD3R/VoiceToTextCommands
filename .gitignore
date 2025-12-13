@@ -1,0 +1,6 @@
+.voice_config.json
+.tools/
+temp_config_dump.txt
+__pycache__/
+.tmp/
+.tmp/

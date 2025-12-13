@@ -1,0 +1,648 @@
+diff --git a/.voice/voice-issues.md b/.voice/voice-issues.md
+index 31c3a2e..1b27eb3 100644
+--- a/.voice/voice-issues.md
++++ b/.voice/voice-issues.md
+@@ -1,5 +1,8 @@
+-# Voice Issues  2025-12-10 22:10
+-
+-- [ ] YouTube banner alignment is off on mobile; respects safe zone across all devices.
+-- [ ] Make title font responsive so it always fits *all devices* safe area on YouTube.
+-- [ ] Add agent that checks GitHub 100MB limit before generating asset bundles.
++- [x] Split issues pane into pending/completed lists with select-all and delete buttons per pane; pane enlarged ~50% and uses sanitizer so free text and wrapped lines become checklist items visible in the GUI. (pending/completed listboxes added, sanitizer hooked to refresh/delete)
++- [x] Reduced input device row padding/blank space while keeping selection readable. (device row spacing tightened)
++- [x] Removed mic test header label, enlarged microphone waterfall height, and boosted visual level scaling so peaks reach the top during loud input; waterfall shows state for mic test/recording. (canvas taller, level scaling x2.5)
++- [x] Cleaned placeholder/stray issue lines by normalizing the issues file into checklist items. (sanitizer writes normalized bullets)
++- [x] , the issue with, I can't see all of the text for the issue in the issues window, both the completed issues and the pending issues. I want to be able to see all the text. It seems that the text continues to run. I want you to wrap the text for each issue so that it falls inside the issues window. (listboxes now render wrapped lines with indentation; mappings updated so selection/deletion still works)
++- [x] , I want you to consider all of the issues that I've just addressed and I want you to consider all the features. And then I want you to use an expert analysis over my feature set and compare it to best market features that are trending that are similar to these kind of application, voice decoding interfaces and propose features that I haven't already considered in this tool that might be useful to implement as well. (feature proposals listed in latest reply)
++- [ ] The issue is that when I select a issue in the completed issues section, this issue will be the same in the pending issues section. So if I select the split issues pane into pending completed lists with select all and delete buttons, it only selects the first line. So if I select that first issue, it should select the five lines which contain that whole issue in itself. As opposed to just selecting one line from the pane, it should select, if I click one of the issues, it should select all the lines related to that standalone issue.
++- [ ] I'm going to test the video for you. I'm going to test the video for you.
+diff --git a/README.md b/README.md
+index b69305e..2dfc5cd 100644
+--- a/README.md
++++ b/README.md
+@@ -6,13 +6,18 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
+ - Capture issues by voice into a repo-local Markdown file (`.voice/voice-issues.md`).
+ - Run Codex to address issues and tick them off with short notes.
+ - Uses local STT via `whisper.cpp` (no API key needed).
++- GUI recorder with mic selection and live level (whisper.cpp backend).
++- GUI mic test with waterfall meter to confirm the mic is working.
++- Hotkey daemon for quick capture via whisper.cpp.
++- One-click installer to fetch whisper.cpp binary/model into the repo and set config.
++- Test transcription helper (HF whisper) for quick verification.
+ 
+ ## Quick start
+ 1) Clone and enter the repo.
+ 2) Build/download whisper.cpp and a model (e.g., `ggml-base.bin`).
+    - whisper.cpp: https://github.com/ggerganov/whisper.cpp
+    - Models (GGML/GGUF): https://huggingface.co/ggerganov/whisper.cpp or run `bash ./models/download-ggml-model.sh base` inside whisper.cpp.
+-3) Copy `voice_issues_config.sample.json` to `~/.voice_issues_config.json` and set:
++3) Copy `.voice_config.sample.json` to `.voice_config.json` (in this repo) and set:
+    - `repos`: map your repo path to `.voice/voice-issues.md`.
+    - `stt.binaryPath`: path to `main`/`main.exe`.
+    - `stt.model`: path to your GGML/GGUF model.
+@@ -23,28 +28,43 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
+    - Phrases: "next issue" starts a new bullet; "end issues" stops ingestion.  
+    - Writes/updates `.voice/voice-issues.md`.
+ 5) Review/fix via Codex:
+-   - PowerShell: `./scripts/codex_review_issues.ps1`
+-   - Bash: `./scripts/codex_review_issues.sh`
++   - PowerShell: `./codex_review_issues.ps1`
++   - Bash: `./codex_review_issues.sh`
+    Codex will use `.voice/voice-issues.md` as its task list, apply fixes, and tick items with notes.
+ 
+ ## Files
+ - `.voice/voice-issues.md` — living checklist (voice-captured).
+ - `voice_issue_daemon.py` — daemon/CLI to transcribe and append issues.
+ - `voice_hotkey_daemon.py` — desktop hotkey recorder (mic → whisper.cpp → issues file).
+-- `voice_issues_config.sample.json` — config template for repos/phrases/STT.
+-- `scripts/codex_review_issues.ps1` / `scripts/codex_review_issues.sh` — run Codex against the checklist.
++- `.voice_config.sample.json` — config template for repos/phrases/STT (copy to `.voice_config.json`).
++- `codex_review_issues.ps1` / `codex_review_issues.sh` — run Codex against the checklist.
+ - `VOICE_ISSUE_WORKFLOW.md` — fuller workflow and options.
+ - `requirements.txt` — Python deps for hotkey/mic capture.
+ 
+ ## Tips
+ - Quick test without audio: `python voice_issue_daemon.py --text "first issue next issue second issue end issues"`.
+-- If whisper.cpp binary is not in PATH, set `stt.binaryPath` in `~/.voice_issues_config.json` (e.g., `C:/tools/whisper.cpp/main.exe`).
++- If whisper.cpp binary is not in PATH, set `stt.binaryPath` in `.voice_config.json` (e.g., `.tools/whisper/main.exe`).
+ - Ensure `.voice/voice-issues.md` is committed so Codex can both read and update it.
+ 
++## Whisper sanity test
++- Optional deps (CPU): `python -m pip install --user --index-url https://download.pytorch.org/whl/cpu torch torchaudio` and `python -m pip install --user soundfile transformers`
++- Transcribe a WAV (defaults to `openai/whisper-tiny.en`): `python test_whisper_transcription.py --audio TestVoice.wav`
++
++## One-click install (Windows)
++- Double-click `install_whisper.cmd` (or run `powershell -ExecutionPolicy Bypass -File install_whisper.ps1`).
++- This downloads the official whisper.cpp v1.8.2 x64 binary and the `ggml-base.en.bin` model into `.tools/whisper` and updates `.voice_config.json` in this repo to point at them.
++- After that, run `python voice_hotkey_daemon.py` and use your configured hotkeys.
++
++## GUI recorder (mic select + live level)
++- Run: `python voice_gui.py` (wrapper for the GUI app)
++- Pick your microphone from the dropdown, click “Start Recording”, then “Stop & Transcribe”.
++- The input level bar shows live mic activity; results are appended to `.voice/voice-issues.md` using your config’s whisper paths and hotkeys are not required.
++
+ ## Hotkey desktop capture (Windows)
+ 1) Install Python deps: `pip install -r requirements.txt`
+-2) Ensure whisper.cpp binary/model paths are set in `~/.voice_issues_config.json`.
+-3) Run: `python voice_hotkey_daemon.py`  
+-   - Start/stop recording: `Ctrl+Alt+I` (default)
+-   - Quit: `Ctrl+Alt+Q`
++2) Ensure whisper.cpp binary/model paths are set in `.voice_config.json`.
++3) Optional: set hotkeys in `.voice_config.json` under `hotkeys.toggle` and `hotkeys.quit`.
++4) Run: `python voice_hotkey_daemon.py`  
++   - Start/stop recording: `Ctrl+Alt+I` (default, or your `hotkeys.toggle`)
++   - Quit: `Ctrl+Alt+Q` (default, or your `hotkeys.quit`)
+    - It records mic audio, transcribes via whisper.cpp, segments issues on “next issue” / stops on “end issues”, and appends to `.voice/voice-issues.md`.
+diff --git a/VOICE_ISSUE_WORKFLOW.md b/VOICE_ISSUE_WORKFLOW.md
+index 73025b8..be2cc27 100644
+--- a/VOICE_ISSUE_WORKFLOW.md
++++ b/VOICE_ISSUE_WORKFLOW.md
+@@ -4,17 +4,17 @@ This repo uses a voice-driven issues file that Codex can consume and update.
+ 
+ ## Files
+ - `.voice/voice-issues.md`: living checklist captured from voice; Codex both reads and updates this file.
+-- `scripts/codex_review_issues.ps1`: Windows helper to run Codex against the checklist.
+-- `scripts/codex_review_issues.sh`: Bash helper for the same flow.
++- `codex_review_issues.ps1`: Windows helper to run Codex against the checklist.
++- `codex_review_issues.sh`: Bash helper for the same flow.
+ - `voice_issue_daemon.py`: Python skeleton daemon to capture voice and append issues.
+ - `voice_hotkey_daemon.py`: desktop hotkey recorder (Ctrl+Alt+I by default) that records mic, runs whisper.cpp, and appends issues.
+-- `voice_issues_config.sample.json`: starter config for daemon paths/phrases.
++- `.voice_config.sample.json`: starter config for daemon paths/phrases.
+   - By default uses local `whisper.cpp` (no API key). Set `binaryPath` to your built whisper.cpp binary and `model` to a downloaded GGML/GGUF file.
+ 
+ ## Capture Issues by Voice
+ You can dry-run the Python skeleton without real STT; it accepts `--text` to simulate transcription.
+ 
+-Config template: copy `voice_issues_config.sample.json` to `~/.voice_issues_config.json` and adjust repo path + issues file.
++Config template: copy `.voice_config.sample.json` to `.voice_config.json` (repo root) and adjust repo path + issues file.
+ 
+ Run (simulated input):
+ ```
+@@ -39,15 +39,16 @@ Result: appends to `.voice/voice-issues.md` in the configured repo as unchecked
+ ```
+ 
+ ## Review Issues with Codex
+-- PowerShell: `./scripts/codex_review_issues.ps1`
+-- Bash: `./scripts/codex_review_issues.sh`
++- PowerShell: `./codex_review_issues.ps1`
++- Bash: `./codex_review_issues.sh`
+ 
+ These scripts:
+ 1. Verify `.voice/voice-issues.md` exists.
+ 2. Invoke `codex --full-auto` with instructions to:
+    - Use the checklist as the task list.
+    - For each addressed issue: modify the codebase, then change `[ ]` to `[x]` in `.voice/voice-issues.md` with a short note (e.g., `(fixed in file X)`).
+-   - Avoid ticking items that weren’t actually worked on.
++   - After the user confirms the fix is acceptable, delete the resolved item from `.voice/voice-issues.md` (do not delete without confirmation).
++   - Avoid ticking items that were not actually worked on.
+ 
+ ## Acceptance Options
+ - Trust mode: Codex fixes and ticks items in one run. If you revert changes, manually untick the item.
+diff --git a/merge agent.md b/merge agent.md
+deleted file mode 100644
+index 7db67f3..0000000
+--- a/merge agent.md	
++++ /dev/null
+@@ -1,52 +0,0 @@
+-# "Merge to Main" Workflow
+-
+-The repo domain can be found in a file called RepoPointer.md use this for branch pushes. 
+-
+-When the user says "merge to main", follow this complete workflow:
+-
+-## Pre-Merge Preparation
+-1. **Pull latest main** - Fetch and merge the latest changes from remote main.
+-2. **Validate branch naming** - Create a conventional commits conform branch using kebab-case:
+-   - `feat/feature-name` for new features
+-   - `fix/bug-name` for bug fixes
+-   - `docs/update-name` for documentation
+-   - `refactor/change-name` for code refactoring
+-   - `test/test-name` for test additions
+-   - `chore/task-name` for maintenance tasks
+-
+-## Commit and Push
+-3. **Run pre-commit checks** - Execute tests and linters if applicable; report any failures.
+-4. **Commit changes** - Use detailed conventional commits messages:
+-   - Format: `type(scope): description`
+-   - Examples: `feat(auth): add user authentication`, `fix(dashboard): resolve memory leak`
+-   - Include body with details if changes are complex.
+-5. **Check for conflicts** - Ensure branch can merge cleanly with main.
+-6. **Push branch** - Push the branch to remote.
+-
+-## Pull Request Creation
+-7. **Create Pull Request** - Generate PR to main with:
+-   - Descriptive title matching commit message format.
+-   - Body containing: changes summary, testing done, breaking changes (if any).
+-   - Link related issues if applicable.
+-
+-## Confirmation and Merge
+-8. **Wait for CI/CD** - Allow automated checks to complete; report status.
+-9. **Present summary** - Show user:
+-   - All commits to be merged.
+-   - Files changed.
+-   - CI/CD status.
+-   - Any warnings or conflicts.
+-10. **Request confirmation** - Ask: "Ready to merge to main? (yes/no)".
+-11. **Merge PR** - After confirmation, merge using squash or merge commit (ask user preference).
+-12. **Verify merge** - Confirm merge was successful.
+-
+-## Cleanup
+-13. **Delete remote branch** - Remove the feature branch from remote.
+-14. **Update local main** - Pull the updated main branch locally.
+-15. **Confirm completion** - Report successful merge with commit SHA.
+-
+-## Error Handling
+-- **If tests fail**: Report failures and ask whether to fix or abort.
+-- **If merge conflicts exist**: Report conflicts and ask user to resolve manually.
+-- **If PR creation fails**: Report error and suggest manual creation.
+-- **If CI/CD fails**: Report failures and ask whether to fix or abort.
+\ No newline at end of file
+diff --git a/scripts/codex_review_issues.ps1 b/scripts/codex_review_issues.ps1
+deleted file mode 100644
+index d44fe55..0000000
+--- a/scripts/codex_review_issues.ps1
++++ /dev/null
+@@ -1,13 +0,0 @@
+-$issuesFile = ".voice/voice-issues.md"
+-if (-not (Test-Path $issuesFile)) {
+-    Write-Host "No voice issues file found at $issuesFile"
+-    exit 1
+-}
+-
+-codex --full-auto @"
+-Use the issues in @$issuesFile as your task list. For each issue you address:
+-1) Update the codebase accordingly.
+-2) Edit @$issuesFile and change its checkbox from [ ] to [x], adding a short note like 'fixed in file X'.
+-
+-Do not tick issues you haven't actually worked on.
+-"@
+diff --git a/scripts/codex_review_issues.sh b/scripts/codex_review_issues.sh
+deleted file mode 100644
+index 4df0d78..0000000
+--- a/scripts/codex_review_issues.sh
++++ /dev/null
+@@ -1,15 +0,0 @@
+-#!/usr/bin/env bash
+-set -e
+-
+-ISSUES_FILE=".voice/voice-issues.md"
+-
+-if [ ! -f "" ]; then
+-  echo "No voice issues file found at "
+-  exit 1
+-fi
+-
+-codex --full-auto "Use the issues in @ as your task list. For each issue you address:
+-1) Update the codebase accordingly.
+-2) Edit @ and change its checkbox from [ ] to [x], adding a short note like 'fixed in file X'.
+-
+-Do not tick issues you haven't actually worked on."
+diff --git a/voice_hotkey_daemon.py b/voice_hotkey_daemon.py
+index 2104dbf..67d4239 100644
+--- a/voice_hotkey_daemon.py
++++ b/voice_hotkey_daemon.py
+@@ -16,6 +16,7 @@ from __future__ import annotations
+ import argparse
+ import queue
+ import sys
++import tempfile
+ import threading
+ import time
+ import wave
+@@ -36,11 +37,35 @@ from voice_issue_daemon import (
+     ConfigLoader,
+     DEFAULT_CONFIG_PATH,
+     IssueWriter,
++    append_issues_incremental,
++    # Reuse splitter and whisper provider; local validation keeps recordings sane.
+     WhisperCppProvider,
+     split_issues,
+ )
+ 
+ 
++def validate_recording(path: Path, max_age_seconds: int = 180) -> float:
++    """
++    Ensure the recorded WAV is present, recent, and has non-zero duration.
++    Returns duration in seconds.
++    """
++    if not path.exists():
++        raise RuntimeError(f"Recording missing at {path}")
++    stat = path.stat()
++    age = time.time() - stat.st_mtime
++    if age > max_age_seconds:
++        raise RuntimeError(f"Recording at {path} is stale (age {age:.1f}s)")
++    if stat.st_size <= 44:
++        raise RuntimeError(f"Recording at {path} is empty (size {stat.st_size} bytes)")
++    with wave.open(str(path), "rb") as wf:
++        frames = wf.getnframes()
++        fr = wf.getframerate() or 1
++        duration = frames / float(fr)
++    if duration <= 0.05:
++        raise RuntimeError(f"Recording at {path} has near-zero duration ({duration:.3f}s)")
++    return duration
++
++
+ def record_audio_to_wav(
+     output_path: Path, stop_event: threading.Event, samplerate: int = 16000, channels: int = 1
+ ) -> None:
+@@ -84,17 +109,20 @@ def transcribe_with_whisper_cpp(audio_file: Path, config) -> str:
+ def run_daemon(
+     config_path: Path,
+     repo_key: Optional[str],
+-    start_stop_hotkey: str,
+-    quit_hotkey: str,
++    start_stop_hotkey: Optional[str],
++    quit_hotkey: Optional[str],
+     samplerate: int,
+     channels: int,
+ ) -> None:
+     config = ConfigLoader.load(config_path)
+     repo_cfg = ConfigLoader.select_repo(config, repo_key)
+ 
++    toggle_hotkey = start_stop_hotkey or config.hotkey_toggle
++    exit_hotkey = quit_hotkey or config.hotkey_quit
++
+     print(f"[info] Using repo: {repo_cfg.repo_path}")
+     print(f"[info] Issues file: {repo_cfg.issues_file}")
+-    print(f"[info] Hotkey: {start_stop_hotkey} to start/stop, {quit_hotkey} to quit")
++    print(f"[info] Hotkey: {toggle_hotkey} to start/stop, {exit_hotkey} to quit")
+ 
+     recording = False
+     stop_event = threading.Event()
+@@ -106,7 +134,12 @@ def run_daemon(
+             return
+         recording = True
+         stop_event = threading.Event()
+-        tmp_wav = Path.cwd() / "tmp_voice_capture.wav"
++        repo_root = Path(__file__).resolve().parent
++        tmp_dir = repo_root / ".tmp"
++        tmp_dir.mkdir(parents=True, exist_ok=True)
++        tmp = tempfile.NamedTemporaryFile(prefix="voice_hotkey_", suffix=".wav", dir=tmp_dir, delete=False)
++        tmp_wav = Path(tmp.name)
++        tmp.close()
+         record_thread = threading.Thread(
+             target=record_audio_to_wav, args=(tmp_wav, stop_event, samplerate, channels), daemon=True
+         )
+@@ -134,23 +167,26 @@ def run_daemon(
+             tmp_wav = stop_recording(state.get("tmp"))
+             if tmp_wav:
+                 try:
++                    dur = validate_recording(tmp_wav)
++                    print(f"[info] Using recording {tmp_wav.name} ({dur:.2f}s)")
+                     transcript = transcribe_with_whisper_cpp(tmp_wav, config)
+                     issues = split_issues(transcript, config.next_issue_phrases, config.stop_phrases)
+                     if not issues:
+                         print("[info] No issues detected.")
+-                        return
+-                    writer = IssueWriter(repo_cfg.issues_file)
+-                    writer.append_issues(issues)
+-                    print(f"[ok] Appended {len(issues)} issue(s) to {repo_cfg.issues_file}")
+-                except Exception as exc:  # noqa: BLE001
+-                    print(f"[error] {exc}", file=sys.stderr)
+-                finally:
++                    else:
++                        writer = IssueWriter(repo_cfg.issues_file)
++                        append_issues_incremental(writer, issues)
++                        print(f"[ok] Appended {len(issues)} issue(s) to {repo_cfg.issues_file}")
++                    # delete only after a successful transcription attempt
+                     try:
+                         tmp_wav.unlink()
+                     except OSError:
+                         pass
++                except Exception as exc:  # noqa: BLE001
++                    print(f"[error] {exc}", file=sys.stderr)
++                    print(f"[warn] Keeping temp WAV for inspection: {tmp_wav}", file=sys.stderr)
+ 
+-    keyboard.add_hotkey(start_stop_hotkey, toggle_recording)
++    keyboard.add_hotkey(toggle_hotkey, toggle_recording)
+ 
+     def quit_daemon():
+         if recording:
+@@ -159,7 +195,7 @@ def run_daemon(
+         keyboard.unhook_all_hotkeys()
+         raise SystemExit(0)
+ 
+-    keyboard.add_hotkey(quit_hotkey, quit_daemon)
++    keyboard.add_hotkey(exit_hotkey, quit_daemon)
+ 
+     try:
+         while True:
+@@ -174,7 +210,7 @@ def parse_args() -> argparse.Namespace:
+         "--config",
+         type=Path,
+         default=DEFAULT_CONFIG_PATH,
+-        help="Path to voice issues config (default: ~/.voice_issues_config.json)",
++        help="Path to voice issues config (default: .voice_config.json in repo)",
+     )
+     parser.add_argument(
+         "--repo",
+@@ -185,14 +221,14 @@ def parse_args() -> argparse.Namespace:
+     parser.add_argument(
+         "--hotkey",
+         type=str,
+-        default="ctrl+alt+i",
+-        help="Global hotkey to start/stop recording (default: ctrl+alt+i)",
++        default=None,
++        help="Global hotkey to start/stop recording (defaults to config.hotkeys.toggle)",
+     )
+     parser.add_argument(
+         "--quit",
+         type=str,
+-        default="ctrl+alt+q",
+-        help="Global hotkey to quit daemon (default: ctrl+alt+q)",
++        default=None,
++        help="Global hotkey to quit daemon (defaults to config.hotkeys.quit)",
+     )
+     parser.add_argument(
+         "--samplerate",
+diff --git a/voice_issue_daemon.py b/voice_issue_daemon.py
+index b5679a1..ae326ef 100644
+--- a/voice_issue_daemon.py
++++ b/voice_issue_daemon.py
+@@ -25,7 +25,8 @@ from pathlib import Path
+ from typing import Iterable, List, Optional
+ 
+ 
+-DEFAULT_CONFIG_PATH = Path.home() / ".voice_issues_config.json"
++REPO_ROOT = Path(__file__).resolve().parent
++DEFAULT_CONFIG_PATH = REPO_ROOT / ".voice_config.json"
+ DEFAULT_HEADER_TITLE = "Voice Issues"
+ 
+ 
+@@ -45,6 +46,12 @@ class VoiceConfig:
+     stt_model: Optional[str]
+     stt_binary: Optional[str]
+     stt_language: Optional[str]
++    stt_input_samplerate: Optional[int]
++    stt_input_channels: Optional[int]
++    hotkey_toggle: str
++    hotkey_quit: str
++    device_allowlist: List[str]
++    device_denylist: List[str]
+ 
+     @classmethod
+     def from_json(cls, data: dict) -> "VoiceConfig":
+@@ -54,6 +61,8 @@ class VoiceConfig:
+         next_issue_phrases = phrases.get("nextIssue") or ["next issue", "next point"]
+         stop_phrases = phrases.get("stop") or ["end issues", "stop issues"]
+         stt = data.get("stt") or {}
++        hotkeys = data.get("hotkeys") or {}
++        devices = data.get("devices") or {}
+         return cls(
+             repos=repos,
+             default_repo=default_repo,
+@@ -63,6 +72,12 @@ class VoiceConfig:
+             stt_model=stt.get("model"),
+             stt_binary=stt.get("binaryPath"),
+             stt_language=stt.get("language"),
++            stt_input_samplerate=stt.get("inputSamplerate"),
++            stt_input_channels=stt.get("inputChannels"),
++            hotkey_toggle=hotkeys.get("toggle", "ctrl+alt+i"),
++            hotkey_quit=hotkeys.get("quit", "ctrl+alt+q"),
++            device_allowlist=devices.get("allowlist") or [],
++            device_denylist=devices.get("denylist") or [],
+         )
+ 
+ 
+@@ -70,8 +85,14 @@ class ConfigLoader:
+     @staticmethod
+     def load(path: Path) -> VoiceConfig:
+         if not path.exists():
++            legacy = Path.home() / ".voice_issues_config.json"
++            if legacy.exists():
++                data = legacy.read_text(encoding="utf-8-sig")
++                path.write_text(data, encoding="utf-8")
++                print(f"[warn] Migrated legacy config from {legacy} to {path}", file=sys.stderr)
++                return VoiceConfig.from_json(json.loads(data))
+             raise FileNotFoundError(
+-                f"Config not found at {path}. Create it from voice_issues_config.sample.json."
++                f"Config not found at {path}. Create it from .voice_config.sample.json in the repo."
+             )
+         data = json.loads(path.read_text(encoding="utf-8-sig"))
+         return VoiceConfig.from_json(data)
+@@ -82,9 +103,18 @@ class ConfigLoader:
+         if not repo_key:
+             raise ValueError("No repo selected and no defaultRepo set in config.")
+         repo_entry = config.repos.get(repo_key)
++        repo_path = Path(repo_key).expanduser().resolve()
++        if not repo_entry:
++            # Attempt to match by normalized absolute path to avoid separator/format mismatches.
++            for key, val in config.repos.items():
++                try:
++                    if Path(key).expanduser().resolve() == repo_path:
++                        repo_entry = val
++                        break
++                except Exception:
++                    continue
+         if not repo_entry or "issuesFile" not in repo_entry:
+             raise ValueError(f"Config for repo '{repo_key}' is missing or incomplete.")
+-        repo_path = Path(repo_key).expanduser().resolve()
+         issues_file = repo_path / repo_entry["issuesFile"]
+         return RepoConfig(repo_path=repo_path, issues_file=issues_file)
+ 
+@@ -109,6 +139,14 @@ class IssueWriter:
+                 f.write(f"- [ ] {issue}\n")
+ 
+ 
++def append_issues_incremental(writer: IssueWriter, issues: Iterable[str]) -> None:
++    """
++    Write issues one-by-one so each boundary (e.g., 'next issue') persists immediately.
++    """
++    for issue in issues:
++        writer.append_issues([issue])
++
++
+ def strip_after_stop(text: str, stop_phrases: List[str]) -> str:
+     if not text:
+         return ""
+@@ -154,6 +192,11 @@ class WhisperCppProvider:
+     """
+ 
+     def __init__(self, binary: Path, model: Path, language: Optional[str] = None):
++        # Prefer whisper-cli.exe if the config still points at main.exe (deprecated wrapper)
++        if binary.name.lower() == "main.exe":
++            alt = binary.with_name("whisper-cli.exe")
++            if alt.exists():
++                binary = alt
+         self.binary = binary
+         self.model = model
+         self.language = language
+@@ -166,31 +209,72 @@ class WhisperCppProvider:
+         if not audio_file.exists():
+             raise FileNotFoundError(f"Audio file not found: {audio_file}")
+ 
++        def rewrite_wav(src: Path, dest: Path) -> None:
++            import wave  # local import to keep top-level lean
++            with wave.open(str(src), "rb") as r:
++                params = r.getparams()
++                data = r.readframes(params.nframes)
++            with wave.open(str(dest), "wb") as w:
++                w.setnchannels(params.nchannels)
++                w.setsampwidth(params.sampwidth)
++                w.setframerate(params.framerate)
++                w.writeframes(data)
++
+         with tempfile.TemporaryDirectory() as tmpdir:
+             out_base = Path(tmpdir) / "whisper_out"
+-            cmd = [
+-                str(self.binary),
+-                "-m",
+-                str(self.model),
+-                "-f",
+-                str(audio_file),
+-                "-otxt",
+-                "-of",
+-                str(out_base),
+-            ]
+-            if self.language:
+-                cmd.extend(["-l", self.language])
+-
+-            try:
+-                subprocess.run(cmd, check=True, capture_output=True)
+-            except subprocess.CalledProcessError as exc:  # noqa: BLE001
+-                stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else ""
+-                raise RuntimeError(f"whisper.cpp failed: {stderr}") from exc
+-
+-            out_txt = Path(f"{out_base}.txt")
+-            if not out_txt.exists():
+-                raise RuntimeError("whisper.cpp did not produce transcription output.")
+-            return out_txt.read_text(encoding="utf-8")
++            in_path = audio_file
++            attempt = 0
++            while True:
++                attempt += 1
++                cmd = [
++                    str(self.binary),
++                    "-m",
++                    str(self.model),
++                    "-f",
++                    str(in_path),
++                    "-otxt",
++                    "-of",
++                    str(out_base),
++                ]
++                if self.language:
++                    cmd.extend(["-l", self.language])
++
++                try:
++                    completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
++                except subprocess.CalledProcessError as exc:  # noqa: BLE001
++                    stderr = exc.stderr if exc.stderr else ""
++                    stdout = exc.stdout if exc.stdout else ""
++                    msg = (stderr or stdout).strip() or "unknown error"
++                    # If WAV read failed, rewrite to a fresh PCM16 and retry once.
++                    if "failed to read audio data as wav" in msg.lower() and attempt == 1 and audio_file.suffix.lower() == ".wav":
++                        fixed = Path(tmpdir) / "rewritten.wav"
++                        rewrite_wav(audio_file, fixed)
++                        in_path = fixed
++                        continue
++                    raise RuntimeError(f"whisper.cpp failed: {msg}") from exc
++                else:
++                    # whisper.cpp sometimes prints warnings to stderr even on success; surface them in logs if needed.
++                    if completed.stderr:
++                        err = completed.stderr.strip()
++                        if err:
++                            print(f"[warn] whisper.cpp: {err}", file=sys.stderr)
++
++                out_txt = Path(f"{out_base}.txt")
++                if out_txt.exists():
++                    return out_txt.read_text(encoding="utf-8")
++
++                stdout = completed.stdout.strip() if completed and completed.stdout else ""
++                stderr = completed.stderr.strip() if completed and completed.stderr else ""
++                # If output missing after first attempt and we haven't rewritten, try a rewrite once.
++                if attempt == 1 and audio_file.suffix.lower() == ".wav":
++                    fixed = Path(tmpdir) / "rewritten.wav"
++                    rewrite_wav(audio_file, fixed)
++                    in_path = fixed
++                    continue
++                raise RuntimeError(
++                    "whisper.cpp did not produce transcription output. "
++                    f"stdout: {stdout or '∅'} | stderr: {stderr or '∅'}"
++                )
+ 
+ 
+ def parse_args() -> argparse.Namespace:
+@@ -199,7 +283,7 @@ def parse_args() -> argparse.Namespace:
+         "--config",
+         type=Path,
+         default=DEFAULT_CONFIG_PATH,
+-        help="Path to voice issues config (default: ~/.voice_issues_config.json)",
++        help="Path to voice issues config (default: .voice_config.json in repo)",
+     )
+     parser.add_argument(
+         "--repo",
+@@ -263,7 +347,7 @@ def main() -> int:
+         return 0
+ 
+     writer = IssueWriter(repo_cfg.issues_file)
+-    writer.append_issues(issues)
++    append_issues_incremental(writer, issues)
+ 
+     print(f"[ok] Appended {len(issues)} issue(s) to {repo_cfg.issues_file}")
+     return 0
+diff --git a/voice_issues_config.sample.json b/voice_issues_config.sample.json
+deleted file mode 100644
+index eb4d318..0000000
+--- a/voice_issues_config.sample.json
++++ /dev/null
+@@ -1,18 +0,0 @@
+-{
+-  "repos": {
+-    "C:/Dev/youtube-banner-agent": {
+-      "issuesFile": ".voice/voice-issues.md"
+-    }
+-  },
+-  "defaultRepo": "C:/Dev/youtube-banner-agent",
+-  "phrases": {
+-    "nextIssue": ["next issue", "next point"],
+-    "stop": ["end issues", "stop issues"]
+-  },
+-  "stt": {
+-    "provider": "whisper_cpp",
+-    "binaryPath": "C:/tools/whisper.cpp/main.exe",
+-    "model": "C:/tools/whisper.cpp/models/ggml-base.bin",
+-    "language": "en"
+-  }
+-}

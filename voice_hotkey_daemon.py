@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import queue
 import sys
+import tempfile
 import threading
 import time
 import wave
@@ -36,9 +37,33 @@ from voice_issue_daemon import (
     ConfigLoader,
     DEFAULT_CONFIG_PATH,
     IssueWriter,
+    append_issues_incremental,
+    # Reuse splitter and whisper provider; local validation keeps recordings sane.
     WhisperCppProvider,
     split_issues,
 )
+
+
+def validate_recording(path: Path, max_age_seconds: int = 180) -> float:
+    """
+    Ensure the recorded WAV is present, recent, and has non-zero duration.
+    Returns duration in seconds.
+    """
+    if not path.exists():
+        raise RuntimeError(f"Recording missing at {path}")
+    stat = path.stat()
+    age = time.time() - stat.st_mtime
+    if age > max_age_seconds:
+        raise RuntimeError(f"Recording at {path} is stale (age {age:.1f}s)")
+    if stat.st_size <= 44:
+        raise RuntimeError(f"Recording at {path} is empty (size {stat.st_size} bytes)")
+    with wave.open(str(path), "rb") as wf:
+        frames = wf.getnframes()
+        fr = wf.getframerate() or 1
+        duration = frames / float(fr)
+    if duration <= 0.05:
+        raise RuntimeError(f"Recording at {path} has near-zero duration ({duration:.3f}s)")
+    return duration
 
 
 def record_audio_to_wav(
@@ -84,17 +109,20 @@ def transcribe_with_whisper_cpp(audio_file: Path, config) -> str:
 def run_daemon(
     config_path: Path,
     repo_key: Optional[str],
-    start_stop_hotkey: str,
-    quit_hotkey: str,
+    start_stop_hotkey: Optional[str],
+    quit_hotkey: Optional[str],
     samplerate: int,
     channels: int,
 ) -> None:
     config = ConfigLoader.load(config_path)
     repo_cfg = ConfigLoader.select_repo(config, repo_key)
 
+    toggle_hotkey = start_stop_hotkey or config.hotkey_toggle
+    exit_hotkey = quit_hotkey or config.hotkey_quit
+
     print(f"[info] Using repo: {repo_cfg.repo_path}")
     print(f"[info] Issues file: {repo_cfg.issues_file}")
-    print(f"[info] Hotkey: {start_stop_hotkey} to start/stop, {quit_hotkey} to quit")
+    print(f"[info] Hotkey: {toggle_hotkey} to start/stop, {exit_hotkey} to quit")
 
     recording = False
     stop_event = threading.Event()
@@ -106,7 +134,12 @@ def run_daemon(
             return
         recording = True
         stop_event = threading.Event()
-        tmp_wav = Path.cwd() / "tmp_voice_capture.wav"
+        repo_root = Path(__file__).resolve().parent
+        tmp_dir = repo_root / ".tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.NamedTemporaryFile(prefix="voice_hotkey_", suffix=".wav", dir=tmp_dir, delete=False)
+        tmp_wav = Path(tmp.name)
+        tmp.close()
         record_thread = threading.Thread(
             target=record_audio_to_wav, args=(tmp_wav, stop_event, samplerate, channels), daemon=True
         )
@@ -134,23 +167,26 @@ def run_daemon(
             tmp_wav = stop_recording(state.get("tmp"))
             if tmp_wav:
                 try:
+                    dur = validate_recording(tmp_wav)
+                    print(f"[info] Using recording {tmp_wav.name} ({dur:.2f}s)")
                     transcript = transcribe_with_whisper_cpp(tmp_wav, config)
                     issues = split_issues(transcript, config.next_issue_phrases, config.stop_phrases)
                     if not issues:
                         print("[info] No issues detected.")
-                        return
-                    writer = IssueWriter(repo_cfg.issues_file)
-                    writer.append_issues(issues)
-                    print(f"[ok] Appended {len(issues)} issue(s) to {repo_cfg.issues_file}")
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[error] {exc}", file=sys.stderr)
-                finally:
+                    else:
+                        writer = IssueWriter(repo_cfg.issues_file)
+                        append_issues_incremental(writer, issues)
+                        print(f"[ok] Appended {len(issues)} issue(s) to {repo_cfg.issues_file}")
+                    # delete only after a successful transcription attempt
                     try:
                         tmp_wav.unlink()
                     except OSError:
                         pass
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[error] {exc}", file=sys.stderr)
+                    print(f"[warn] Keeping temp WAV for inspection: {tmp_wav}", file=sys.stderr)
 
-    keyboard.add_hotkey(start_stop_hotkey, toggle_recording)
+    keyboard.add_hotkey(toggle_hotkey, toggle_recording)
 
     def quit_daemon():
         if recording:
@@ -159,7 +195,7 @@ def run_daemon(
         keyboard.unhook_all_hotkeys()
         raise SystemExit(0)
 
-    keyboard.add_hotkey(quit_hotkey, quit_daemon)
+    keyboard.add_hotkey(exit_hotkey, quit_daemon)
 
     try:
         while True:
@@ -174,7 +210,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help="Path to voice issues config (default: ~/.voice_issues_config.json)",
+        help="Path to voice issues config (default: .voice_config.json in repo)",
     )
     parser.add_argument(
         "--repo",
@@ -185,14 +221,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hotkey",
         type=str,
-        default="ctrl+alt+i",
-        help="Global hotkey to start/stop recording (default: ctrl+alt+i)",
+        default=None,
+        help="Global hotkey to start/stop recording (defaults to config.hotkeys.toggle)",
     )
     parser.add_argument(
         "--quit",
         type=str,
-        default="ctrl+alt+q",
-        help="Global hotkey to quit daemon (default: ctrl+alt+q)",
+        default=None,
+        help="Global hotkey to quit daemon (defaults to config.hotkeys.quit)",
     )
     parser.add_argument(
         "--samplerate",
