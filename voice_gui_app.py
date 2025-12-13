@@ -481,76 +481,20 @@ class VoiceGUI:
         )
         self.info_label = ttk.Label(self.controls_frame, text=info, justify=LEFT)
 
-        issues_panel = ttk.Frame(header, padding=(8, 0, 0, 0))
+        info_row = ttk.Frame(self.controls_frame)
+        info_row.pack(fill=BOTH, padx=10, pady=(0, 6))
+        self.info_label.pack(in_=info_row, anchor="w")
+
+        issues_panel = ttk.Frame(self.controls_frame, padding=(8, 0, 0, 0))
         issues_panel.pack(side=RIGHT, fill=BOTH, expand=True)
-        move_all_row = ttk.Frame(issues_panel)
-        move_all_row.pack(fill=BOTH, expand=False, pady=(0, 4))
-        ttk.Label(move_all_row, text="Move selected to:").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(move_all_row, text="Pending", command=self._mark_any_pending).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
+        self._build_move_buttons(issues_panel)
 
         lists_row = ttk.Frame(issues_panel)
         lists_row.pack(fill=BOTH, expand=True)
 
-        pending_frame = ttk.Frame(lists_row, padding=(0, 0, 4, 0))
-        pending_frame.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(pending_frame, text="Pending issues:").pack(anchor="w")
-        self.issue_listbox = Listbox(
-            pending_frame,
-            height=16,
-            width=40,
-            selectmode="extended",
-            exportselection=False,
-        )
-        self.issue_listbox.pack(fill=BOTH, expand=True, pady=(2, 4))
-        self.issue_listbox.bind("<<ListboxSelect>>", self._on_pending_select)
-        self.issue_listbox.bind("<ButtonPress-1>", lambda e: self._start_drag(e, "pending"))
-        self.issue_listbox.bind("<ButtonRelease-1>", lambda e: self._finish_drag(e, "pending"))
-        pending_btn_row = ttk.Frame(pending_frame)
-        pending_btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
-        ttk.Button(pending_btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(pending_btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
-
-        done_frame = ttk.Frame(lists_row, padding=(4, 0, 0, 0))
-        done_frame.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(done_frame, text="Completed issues:").pack(anchor="w")
-        self.issue_listbox_done = Listbox(
-            done_frame,
-            height=16,
-            width=40,
-            selectmode="extended",
-            exportselection=False,
-        )
-        self.issue_listbox_done.pack(fill=BOTH, expand=True, pady=(2, 4))
-        self.issue_listbox_done.bind("<<ListboxSelect>>", self._on_done_select)
-        self.issue_listbox_done.bind("<ButtonPress-1>", lambda e: self._start_drag(e, "done"))
-        self.issue_listbox_done.bind("<ButtonRelease-1>", lambda e: self._finish_drag(e, "done"))
-        done_btn_row = ttk.Frame(done_frame)
-        done_btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
-        ttk.Button(done_btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(done_btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
-
-        wait_frame = ttk.Frame(lists_row, padding=(4, 0, 0, 0))
-        wait_frame.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(wait_frame, text="Waitlist issues:").pack(anchor="w")
-        self.issue_listbox_wait = Listbox(
-            wait_frame,
-            height=16,
-            width=40,
-            selectmode="extended",
-            exportselection=False,
-        )
-        self.issue_listbox_wait.pack(fill=BOTH, expand=True, pady=(2, 4))
-        self.issue_listbox_wait.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
-        self.issue_listbox_wait.bind("<ButtonPress-1>", lambda e: self._start_drag(e, "wait"))
-        self.issue_listbox_wait.bind("<ButtonRelease-1>", lambda e: self._finish_drag(e, "wait"))
-        wait_btn_row = ttk.Frame(wait_frame)
-        wait_btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
-        ttk.Button(wait_btn_row, text="Select all", command=lambda: self._select_all_list(self.issue_listbox_wait)).pack(
-            side=LEFT, padx=(0, 4)
-        )
-        ttk.Button(wait_btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
+        self._build_issue_column(lists_row, "Pending issues:", "pending")
+        self._build_issue_column(lists_row, "Completed issues:", "done")
+        self._build_issue_column(lists_row, "Waitlist issues:", "wait")
 
         ttk.Checkbutton(
             issues_panel,
@@ -558,6 +502,69 @@ class VoiceGUI:
             variable=self.skip_delete_confirm,
         ).pack(anchor="w", pady=(2, 0))
 
+        self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
+
+        self._build_settings_panel(pad)
+        self._build_audio_panel(pad)
+        self._build_transcript_panel()
+        self._build_action_buttons(pad)
+
+        self.status_var.pack(in_=self.controls_frame, anchor="w", **pad)
+
+        # Log block
+        log_frame = ttk.Frame(self.root)
+        log_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
+        ttk.Label(log_frame, text="Log:").pack(anchor="w")
+        self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
+        self.log_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
+        self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
+
+    def _build_move_buttons(self, parent: ttk.Frame) -> None:
+        move_all_row = ttk.Frame(parent)
+        move_all_row.pack(fill=BOTH, expand=False, pady=(0, 4))
+        ttk.Label(move_all_row, text="Move selected to:").pack(side=LEFT, padx=(0, 6))
+        ttk.Button(move_all_row, text="Pending", command=self._mark_any_pending).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
+
+    def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
+        column = ttk.Frame(parent, padding=(4, 0, 0, 0))
+        column.pack(side=LEFT, fill=BOTH, expand=True)
+        ttk.Label(column, text=label).pack(anchor="w")
+        listbox = Listbox(
+            column,
+            height=16,
+            selectmode="extended",
+            exportselection=False,
+        )
+        listbox.pack(fill=BOTH, expand=True, pady=(2, 4))
+        if bucket == "pending":
+            self.issue_listbox = listbox
+            listbox.bind("<<ListboxSelect>>", self._on_pending_select)
+        elif bucket == "done":
+            self.issue_listbox_done = listbox
+            listbox.bind("<<ListboxSelect>>", self._on_done_select)
+        else:
+            self.issue_listbox_wait = listbox
+            listbox.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
+        listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._start_drag(e, b))
+        listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
+
+        btn_row = ttk.Frame(column)
+        btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
+        if bucket == "pending":
+            ttk.Button(btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
+            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
+        elif bucket == "done":
+            ttk.Button(btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
+            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
+        else:
+            ttk.Button(btn_row, text="Select all", command=lambda: self._select_all_list(self.issue_listbox_wait)).pack(
+                side=LEFT, padx=(0, 4)
+            )
+            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
+
+    def _build_settings_panel(self, pad: dict[str, int]) -> None:
         self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
 
         hk_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
@@ -589,6 +596,7 @@ class VoiceGUI:
         ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
         self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
 
+    def _build_audio_panel(self, pad: dict[str, int]) -> None:
         test_row = ttk.Frame(self.controls_frame, padding=(6, 4, 6, 4))
         test_row.pack(fill=BOTH, **pad)
         self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
@@ -605,30 +613,23 @@ class VoiceGUI:
         self.test_canvas.config(height=280)
         self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
 
-        info_row = ttk.Frame(self.controls_frame)
-        info_row.pack(fill=BOTH, padx=10, pady=(0, 6))
-        self.info_label.pack(in_=info_row, anchor="w")
-
+    def _build_transcript_panel(self) -> None:
         transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
+        header = ttk.Frame(transcript_frame)
+        header.pack(fill=BOTH, expand=False)
+        ttk.Label(header, text="Speech output (from server):").pack(side=LEFT, padx=(0, 6))
+        ttk.Button(header, text="Start server", command=self._start_realtime_server).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(header, text="Stop server", command=self._stop_realtime_server).pack(side=LEFT, padx=(0, 4))
+        ttk.Label(header, textvariable=self.realtime_status_var).pack(side=LEFT, padx=(6, 0))
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
+    def _build_action_buttons(self, pad: dict[str, int]) -> None:
         btn_row = ttk.Frame(self.controls_frame)
         btn_row.pack(fill=BOTH, **pad)
         self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
         self.stop_btn.pack(in_=btn_row, side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
-
-        self.status_var.pack(in_=self.controls_frame, anchor="w", **pad)
-
-        # Log block
-        log_frame = ttk.Frame(self.root)
-        log_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
-        ttk.Label(log_frame, text="Log:").pack(anchor="w")
-        self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
-        self.log_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
-        self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
 
     def _log(self, msg: str) -> None:
         if not self.log_widget:
