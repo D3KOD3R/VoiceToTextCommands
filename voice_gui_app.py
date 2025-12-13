@@ -422,6 +422,7 @@ class VoiceGUI:
         self.start_btn: ttk.Button | None = None
         self.stop_btn: ttk.Button | None = None
         self.test_cta_btn: ttk.Button | None = None
+        self.live_transcript_widget: scrolledtext.ScrolledText | None = None
         self.test_btn: ttk.Button | None = None
         self.test_canvas: Canvas | None = None
         self.hotkey_indicator = None
@@ -579,12 +580,21 @@ class VoiceGUI:
         self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
         self.live_indicator.pack(side=LEFT, padx=(4, 0))
 
-    def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        meter_row = ttk.Frame(parent)
-        meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
-        self.level_canvas = Canvas(meter_row, width=40, height=80, bg="#1e1e1e", highlightthickness=0)
-        self.level_canvas.pack(side=LEFT, padx=(0, 0))
+    def _build_live_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        level_frame = ttk.Frame(parent, padding=(6, 4, 6, 4))
+        level_frame.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=(0, 4))
+        ttk.Label(level_frame, text="Level").pack(anchor="w")
+        self.level_canvas = Canvas(level_frame, width=40, height=80, bg="#1e1e1e", highlightthickness=0)
+        self.level_canvas.pack(side=LEFT, pady=(4, 0))
 
+        live_output_frame = ttk.Frame(parent, padding=(6, 4, 6, 4))
+        live_output_frame.grid(row=0, column=1, sticky="nsew")
+        live_output_frame.columnconfigure(0, weight=1)
+        ttk.Label(live_output_frame, text="Live speech output:").pack(anchor="w")
+        self.live_transcript_widget = scrolledtext.ScrolledText(live_output_frame, height=5, state=DISABLED)
+        self.live_transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
+
+    def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         wf_header = ttk.Frame(parent)
         wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
@@ -596,7 +606,7 @@ class VoiceGUI:
     def _build_transcript_panel(self, parent: ttk.Frame) -> None:
         transcript_frame = ttk.Frame(parent, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        ttk.Label(transcript_frame, text="Speech output:").pack(anchor="w")
+        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
@@ -642,10 +652,18 @@ class VoiceGUI:
         self.transcript_widget.see(END)
         self.transcript_widget.config(state=DISABLED)
 
+    def _append_live_transcript(self, text: str) -> None:
+        if not self.live_transcript_widget or not text:
+            return
+        self.live_transcript_widget.config(state=NORMAL)
+        self.live_transcript_widget.insert(END, text.strip() + "\n")
+        self.live_transcript_widget.see(END)
+        self.live_transcript_widget.config(state=DISABLED)
+
     def _handle_transcript_message(self, text: str) -> None:
         if not text:
             return
-        self.root.after(0, lambda: self._append_transcript(text))
+        self.root.after(0, lambda: self._append_live_transcript(text))
 
     def _start_transcript_listener(self) -> None:
         if not self.config.realtime_ws_url:
