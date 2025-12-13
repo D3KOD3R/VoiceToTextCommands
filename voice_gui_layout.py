@@ -69,8 +69,4 @@ def build_layout_structure(gui: "VoiceGUI") -> None:
     audio_section.columnconfigure(0, weight=1)
     gui._build_audio_panel(audio_section, pad)
 
-    transcript_section = ttk.Frame(controls_frame)
-    transcript_section.grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 6))
-    gui._build_transcript_panel(transcript_section)
-
     gui._build_log_block(gui.root)

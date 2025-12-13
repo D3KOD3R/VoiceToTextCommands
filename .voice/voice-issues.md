@@ -1,1 +1,4 @@
-- [x] Double-click any issue in Pending/Completed/Waitlist to edit its text inline and persist the change back to `.voice/voice-issues.md`.
+- [ ] The first issue that I can see is that the user cannot select a button for delegating a repo path to the program
+- [ ] I don't want the text at the top of the window there anymore. The just the plain text repo issues hotkeys that can be deleted
+- [ ] You keep putting the transcription text into the live speech output window. This is not necessary. There's no need for this. I want to keep the window for when I do hook up the live playback server later. But otherwise just leave it as is
+- [ ] I want you to completely delete the level box. The level box is not necessary. I can see the levels in the waterfall chart.

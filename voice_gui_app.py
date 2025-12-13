@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import sys
 import textwrap
 import tempfile
@@ -43,6 +44,9 @@ except Exception:  # noqa: BLE001
 
 # Ensure repo root is importable regardless of CWD
 ROOT = Path(__file__).resolve().parent
+REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
+AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
+REPO_HISTORY_LIMIT = 12
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -444,7 +448,6 @@ class VoiceGUI:
         self.skip_delete_confirm = BooleanVar(value=False)
         self._drag_info: dict | None = None
         self.waterfall_status: ttk.Label | None = None
-        self.transcript_widget: scrolledtext.ScrolledText | None = None
         self.transcript_listener: TranscriptListener | None = None
         self.info_label: ttk.Label | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
@@ -452,6 +455,8 @@ class VoiceGUI:
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
         self.device_combo: ttk.Combobox | None = None
+        self.repo_combo: ttk.Combobox | None = None
+        self.repo_history: list[str] = self._load_repo_history()
 
         self._build_layout()
         self._ensure_keyboard_module()
@@ -503,16 +508,18 @@ class VoiceGUI:
     def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
         column = ttk.Frame(parent, padding=(4, 0, 0, 0))
         column.pack(side=LEFT, fill=BOTH, expand=True)
+        column.columnconfigure(0, weight=1)
+        column.rowconfigure(1, weight=1)
         base_label = f"{label.strip(':')}:"
         header = ttk.Label(column, text=f"{base_label} [0]")
-        header.pack(anchor="w")
+        header.grid(row=0, column=0, sticky="w")
         listbox = Listbox(
             column,
             height=16,
             selectmode="extended",
             exportselection=False,
         )
-        listbox.pack(fill=BOTH, expand=True, pady=(2, 4))
+        listbox.grid(row=1, column=0, sticky="nsew", pady=(2, 4))
         if bucket == "pending":
             self.issue_listbox = listbox
             listbox.bind("<<ListboxSelect>>", self._on_pending_select)
@@ -528,10 +535,14 @@ class VoiceGUI:
         listbox.bind("<Double-Button-1>", lambda e, b=bucket: self._on_issue_double_click(e, b))
 
         btn_row = ttk.Frame(column)
-        btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
+        btn_row.grid(row=2, column=0, sticky="ew", pady=(0, 2))
         if bucket == "pending":
             ttk.Button(btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
             ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
+            move_row = ttk.Frame(column)
+            move_row.grid(row=3, column=0, sticky="ew", pady=(0, 2))
+            ttk.Button(move_row, text="Move up", command=lambda: self._move_pending_selection(-1)).pack(side=LEFT, padx=(0, 4))
+            ttk.Button(move_row, text="Move down", command=lambda: self._move_pending_selection(1)).pack(side=LEFT)
         elif bucket == "done":
             ttk.Button(btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
             ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
@@ -555,14 +566,28 @@ class VoiceGUI:
         path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         path_row.pack(fill=BOTH, **pad)
         ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(path_row, textvariable=self.repo_path_var, width=70).pack(side=LEFT, padx=(0, 10))
+        repo_values = list(self.repo_history)
+        current_repo = str(self.repo_cfg.repo_path)
+        if repo_values and repo_values[0] == current_repo:
+            combo_values = repo_values
+        else:
+            combo_values = [current_repo] + [v for v in repo_values if v != current_repo]
+        self.repo_combo = ttk.Combobox(
+            path_row,
+            textvariable=self.repo_path_var,
+            values=combo_values,
+            state="normal",
+            width=70,
+        )
+        self.repo_combo.pack(side=LEFT, padx=(0, 10))
+        self._update_repo_combo_values(current_repo=self.repo_cfg.repo_path)
 
         issue_path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
-        apply_btn = ttk.Button(parent, text="Apply settings", command=self._apply_settings)
-        apply_btn.pack(fill=BOTH, padx=10, pady=(0, 6))
+        apply_btn = ttk.Button(parent, text="Apply settings", command=self._apply_settings, width=18)
+        apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
 
         device_row = ttk.Frame(parent, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
@@ -605,13 +630,6 @@ class VoiceGUI:
         self.test_canvas = Canvas(parent, height=280, bg="#1e1e1e", highlightthickness=0)
         self.test_canvas.pack(fill=BOTH, expand=True, padx=10, pady=(0, 5))
 
-    def _build_transcript_panel(self, parent: ttk.Frame) -> None:
-        transcript_frame = ttk.Frame(parent, padding=(6, 2, 6, 2))
-        transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
-        self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
-        self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
-
     def _build_action_buttons(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         btn_row = ttk.Frame(parent)
         btn_row.pack(fill=BOTH, **pad)
@@ -645,14 +663,6 @@ class VoiceGUI:
         self.log_widget.insert(END, msg + "\n")
         self.log_widget.see(END)
         self.log_widget.config(state=DISABLED)
-
-    def _append_transcript(self, text: str) -> None:
-        if not self.transcript_widget or not text:
-            return
-        self.transcript_widget.config(state=NORMAL)
-        self.transcript_widget.insert(END, text.strip() + "\n")
-        self.transcript_widget.see(END)
-        self.transcript_widget.config(state=DISABLED)
 
     def _append_live_transcript(self, text: str) -> None:
         if not self.live_transcript_widget or not text:
@@ -734,7 +744,10 @@ class VoiceGUI:
         for idx, (_, text) in enumerate(entries):
             wrapped = textwrap.wrap(text, width=wrap_width) or [text]
             for j, line in enumerate(wrapped):
-                display = line if j == 0 else f"   {line}"
+                if j == 0:
+                    display = f"{idx + 1}. {line}"
+                else:
+                    display = f"   {line}"
                 listbox.insert(END, display)
                 row_map.append(idx)
 
@@ -967,6 +980,81 @@ class VoiceGUI:
         if self.issue_listbox_done:
             self.issue_listbox_done.select_set(0, END)
 
+    def _selected_pending_ids(self, selection: tuple[int, ...]) -> set[tuple[int, ...]]:
+        ids: set[tuple[int, ...]] = set()
+        for row in selection:
+            if 0 <= row < len(self.pending_row_map):
+                entry_idx = self.pending_row_map[row]
+                if 0 <= entry_idx < len(self.issue_entries_pending):
+                    idx_list, _ = self.issue_entries_pending[entry_idx]
+                    ids.add(tuple(idx_list))
+        return ids
+
+    def _reorder_pending_segments(
+        self, items: list[tuple[tuple[int, ...], str, str]], selected_ids: set[tuple[int, ...]], direction: int
+    ) -> list[tuple[tuple[int, ...], str, str]]:
+        segments: list[tuple[bool, list[tuple[tuple[int, ...], str, str]]]] = []
+        current_type: bool | None = None
+        current_segment: list[tuple[tuple[int, ...], str, str]] = []
+        for item in items:
+            is_selected = item[0] in selected_ids
+            if current_type is None or is_selected != current_type:
+                if current_segment:
+                    segments.append((current_type, current_segment))
+                current_segment = []
+                current_type = is_selected
+            current_segment.append(item)
+        if current_segment:
+            segments.append((current_type, current_segment))
+
+        if direction == -1:
+            idx = 0
+            while idx < len(segments):
+                is_selected, seg = segments[idx]
+                if is_selected and idx > 0 and not segments[idx - 1][0]:
+                    segments[idx - 1], segments[idx] = segments[idx], segments[idx - 1]
+                    idx += 1
+                idx += 1
+        else:
+            idx = len(segments) - 1
+            while idx >= 0:
+                is_selected, seg = segments[idx]
+                if is_selected and idx < len(segments) - 1 and not segments[idx + 1][0]:
+                    segments[idx], segments[idx + 1] = segments[idx + 1], segments[idx]
+                    idx -= 1
+                idx -= 1
+
+        new_items: list[tuple[tuple[int, ...], str, str]] = []
+        for _, segment in segments:
+            new_items.extend(segment)
+        return new_items
+
+    def _move_pending_selection(self, direction: int) -> None:
+        if not self.issue_listbox:
+            return
+        selection = self.issue_listbox.curselection()
+        if not selection:
+            return
+        selected_ids = self._selected_pending_ids(selection)
+        if not selected_ids:
+            return
+        pending_values = [(tuple(idx_list), "[ ]", text) for idx_list, text in self.issue_entries_pending]
+        reordered = self._reorder_pending_segments(pending_values, selected_ids, direction)
+        if reordered == pending_values:
+            return
+        entries = self._read_issue_entries()
+        pending_iter = iter((state, text) for _, state, text in reordered)
+        new_entries: list[tuple[str, str]] = []
+        for state, text in entries:
+            if self._is_pending_state(state):
+                new_state, new_text = next(pending_iter)
+                new_entries.append((new_state, new_text))
+            else:
+                new_entries.append((state, text))
+        self._write_issue_entries(new_entries)
+        self._refresh_issue_list()
+        self._log(f"[ok] Reordered {len(selected_ids)} pending issue(s).")
+
     def _delete_selected_pending(self) -> None:
         if not self.issue_listbox:
             return
@@ -1162,6 +1250,9 @@ class VoiceGUI:
             self._log(f"[error] Invalid paths: {exc}")
             return
 
+        self._record_repo_history(repo_path)
+        self._ensure_repo_voice_assets(repo_path, issues_path)
+
         try:
             data = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8-sig"))
         except Exception as exc:  # noqa: BLE001
@@ -1210,13 +1301,73 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to apply settings: {exc}")
 
-    def _sanitize_issues_file(self) -> list[str]:
-        """Normalize the issues file: collapse wrapped lines into bullets, convert stray text into checklist items."""
+    def _load_repo_history(self) -> list[str]:
+        try:
+            if not REPO_HISTORY_PATH.exists():
+                return []
+            data = json.loads(REPO_HISTORY_PATH.read_text(encoding="utf-8"))
+            history = []
+            seen = set()
+            for item in data.get("history", []):
+                try:
+                    path = str(Path(item).expanduser().resolve())
+                except Exception:
+                    continue
+                if path not in seen:
+                    seen.add(path)
+                    history.append(path)
+            return history[:REPO_HISTORY_LIMIT]
+        except Exception:
+            return []
+
+    def _persist_repo_history(self) -> None:
+        try:
+            REPO_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            REPO_HISTORY_PATH.write_text(json.dumps({"history": self.repo_history}, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Could not persist repo history: {exc}")
+
+    def _record_repo_history(self, repo_path: Path) -> None:
+        repo_str = str(repo_path)
+        history = [repo_str] + [p for p in self.repo_history if p != repo_str]
+        self.repo_history = history[:REPO_HISTORY_LIMIT]
+        self._persist_repo_history()
+        self._update_repo_combo_values(current_repo=repo_path)
+
+    def _update_repo_combo_values(self, current_repo: Path | None = None) -> None:
+        combo = self.repo_combo
+        if not combo:
+            return
+        values = list(self.repo_history)
+        current = str(current_repo or self.repo_cfg.repo_path)
+        if values and values[0] == current:
+            combo_values = values
+        else:
+            combo_values = [current] + [v for v in values if v != current]
+        combo["values"] = combo_values
+
+    def _ensure_repo_voice_assets(self, repo_path: Path, issues_path: Path) -> None:
+        try:
+            issues_path.parent.mkdir(parents=True, exist_ok=True)
+            IssueWriter(issues_path).ensure_file()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to prepare issues file at {issues_path}: {exc}")
+        try:
+            voice_dir = repo_path / ".voice"
+            voice_dir.mkdir(parents=True, exist_ok=True)
+            if AGENT_VOICE_SOURCE.exists():
+                target = voice_dir / AGENT_VOICE_SOURCE.name
+                if not target.exists():
+                    shutil.copy(AGENT_VOICE_SOURCE, target)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to copy voice guidance into {repo_path}: {exc}")
+
+    def _read_issue_entries(self) -> list[tuple[str, str]]:
         writer = IssueWriter(self.repo_cfg.issues_file)
         writer.ensure_file()
         lines = self.repo_cfg.issues_file.read_text(encoding="utf-8-sig").splitlines()
-        entries: list[tuple[str, str]] = []  # (state, text)
-        current_state = None
+        entries: list[tuple[str, str]] = []
+        current_state: str | None = None
         current_text: list[str] = []
 
         def flush_pending() -> None:
@@ -1233,7 +1384,6 @@ class VoiceGUI:
             stripped = line.strip()
             if stripped.startswith("- [") or stripped.startswith("* ["):
                 flush_pending()
-                # Extract state and body
                 try:
                     state = stripped.split("]", 1)[0].split("[", 1)[1]
                     state = f"[{state}]"
@@ -1250,13 +1400,39 @@ class VoiceGUI:
                     current_state = "[ ]"
                 current_text.append(stripped)
         flush_pending()
+        return entries
 
-        new_lines = [f"- {state} {text}" for state, text in entries]
-        text_out = "\n".join(new_lines)
+    def _format_issue_lines(self, entries: list[tuple[str, str]]) -> list[str]:
+        return [f"- {state} {text}" for state, text in entries]
+
+    def _write_issue_entries(self, entries: list[tuple[str, str]]) -> None:
+        lines = self._format_issue_lines(entries)
+        text_out = "\n".join(lines)
         if text_out and not text_out.endswith("\n"):
             text_out += "\n"
         self.repo_cfg.issues_file.write_text(text_out, encoding="utf-8")
-        return new_lines
+
+    @staticmethod
+    def _is_pending_state(state: str) -> bool:
+        return state.strip().lower() == "[ ]"
+
+    @staticmethod
+    def _deduplicate_issues(issues: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for issue in issues:
+            normalized = issue.strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append(issue)
+        return unique
+
+    def _sanitize_issues_file(self) -> list[str]:
+        """Normalize the issues file: collapse wrapped lines into bullets, convert stray text into checklist items."""
+        entries = self._read_issue_entries()
+        self._write_issue_entries(entries)
+        return self._format_issue_lines(entries)
 
     def refresh_devices(self) -> None:
         self.device_list = list_input_devices(self.config.device_allowlist, self.config.device_denylist)
@@ -1348,8 +1524,12 @@ class VoiceGUI:
             transcript = transcribe_with_whisper_cpp(self.tmp_wav, self.config)
             self._send_transcript_to_server(transcript)
             if transcript.strip():
-                self._append_transcript(f"[local] {transcript.strip()}")
+                self._append_live_transcript(f"[local] {transcript.strip()}")
             issues = split_issues(transcript, self.config.next_issue_phrases, self.config.stop_phrases)
+            unique_issues = self._deduplicate_issues(issues)
+            if len(unique_issues) != len(issues):
+                self._log(f"[info] Dropped {len(issues) - len(unique_issues)} duplicate issue(s).")
+            issues = unique_issues
             if not issues:
                 self._log("[info] No issues detected.")
             else:
