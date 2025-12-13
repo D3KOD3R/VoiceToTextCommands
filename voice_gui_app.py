@@ -469,33 +469,35 @@ class VoiceGUI:
         # Controls block (everything above the log)
         self.controls_frame.pack(fill=BOTH, expand=False)
 
-        layout_row = ttk.Frame(self.controls_frame)
-        layout_row.pack(fill=BOTH, expand=True, **pad)
-
-        left_panel = ttk.Frame(layout_row)
-        left_panel.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 12))
-        header = ttk.Frame(left_panel)
-        header.pack(fill=BOTH)
+        header = ttk.Frame(self.controls_frame)
+        header.pack(fill=BOTH, **pad)
         ttk.Label(header, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         info = (
             f"Repo: {self.repo_cfg.repo_path}\n"
             f"Issues: {self.repo_cfg.issues_file}\n"
             f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
         )
-        self.info_label = ttk.Label(header, text=info, justify=LEFT)
-        self.info_label.pack(anchor="w", pady=(4, 0))
+        info_row = ttk.Frame(header)
+        info_row.pack(fill=BOTH, padx=6, pady=(4, 0))
+        self.info_label = ttk.Label(info_row, text=info, justify=LEFT)
+        self.info_label.pack(anchor="w")
 
-        settings_block = ttk.Frame(left_panel)
-        settings_block.pack(fill=BOTH, expand=False, pady=(6, 0))
-        self._build_settings_panel(settings_block, pad)
+        body = ttk.Frame(self.controls_frame)
+        body.pack(fill=BOTH, expand=True, **pad)
+
+        left_panel = ttk.Frame(body)
+        left_panel.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 12))
+
+        right_panel = ttk.Frame(body, width=420)
+        right_panel.pack(side=RIGHT, fill=BOTH, expand=False)
+
+        self._build_settings_panel(left_panel, pad)
         self._build_audio_panel(left_panel, pad)
         self._build_transcript_panel(left_panel)
         self._build_action_buttons(left_panel, pad)
         self.status_var.pack(in_=left_panel, anchor="w", **pad)
 
-        issues_panel = ttk.Frame(layout_row, width=420)
-        issues_panel.pack(side=RIGHT, fill=BOTH, expand=False)
-        self._build_issues_panel(issues_panel)
+        self._build_issues_panel(right_panel)
 
         # Log block
         log_frame = ttk.Frame(self.root)
