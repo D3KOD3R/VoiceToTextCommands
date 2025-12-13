@@ -46,6 +46,7 @@ except Exception:  # noqa: BLE001
 ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
 AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
+VOICE_WORKFLOW_SOURCE = ROOT / "VOICE_ISSUE_WORKFLOW.md"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
 if str(ROOT) not in sys.path:
@@ -55,6 +56,7 @@ from voice_issue_daemon import (
     ConfigLoader,
     DEFAULT_CONFIG_PATH,
     IssueWriter,
+    RepoConfig,
     WhisperCppProvider,
     append_issues_incremental,
     split_issues,
@@ -493,6 +495,7 @@ class VoiceGUI:
         ttk.Button(move_all_row, text="Pending", command=self._mark_any_pending).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(move_all_row, text="Remove duplicates", command=self._remove_duplicate_issues).pack(side=LEFT, padx=(0, 4))
         ttk.Checkbutton(
             move_all_row,
             text="Skip delete confirmation",
@@ -1319,8 +1322,17 @@ class VoiceGUI:
         self.issues_path_var.set(str(issues_path))
         self._ensure_repo_voice_assets(repo_path, issues_path)
         self._record_repo_history(repo_path)
+        try:
+            rel_issue_entry = str(issues_path.resolve().relative_to(repo_path))
+        except Exception:
+            rel_issue_entry = str(issues_path.resolve())
+        if self.config:
+            self.config.default_repo = str(repo_path)
+            self.config.repos[str(repo_path)] = {"issuesFile": rel_issue_entry}
+        self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=issues_path)
         self.repo_path_var.set(str(repo_path))
         self.issues_path_var.set(str(issues_path))
+        self._refresh_issue_list()
         self._refresh_static_info()
         self._log(f"[ok] Created voice issues file at {issues_path}")
 
@@ -1430,6 +1442,10 @@ class VoiceGUI:
                 target = voice_dir / AGENT_VOICE_SOURCE.name
                 if not target.exists():
                     shutil.copy(AGENT_VOICE_SOURCE, target)
+            if VOICE_WORKFLOW_SOURCE.exists():
+                workflow_target = voice_dir / VOICE_WORKFLOW_SOURCE.name
+                if not workflow_target.exists():
+                    shutil.copy(VOICE_WORKFLOW_SOURCE, workflow_target)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to copy voice guidance into {repo_path}: {exc}")
 
@@ -1504,6 +1520,30 @@ class VoiceGUI:
         entries = self._read_issue_entries()
         self._write_issue_entries(entries)
         return self._format_issue_lines(entries)
+
+    def _remove_duplicate_issues(self) -> None:
+        try:
+            entries = self._read_issue_entries()
+            unique_entries: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            duplicates = 0
+            for state, text in entries:
+                normalized = text.strip().lower()
+                if not normalized:
+                    continue
+                if normalized in seen:
+                    duplicates += 1
+                    continue
+                seen.add(normalized)
+                unique_entries.append((state, text))
+            if duplicates == 0:
+                self._log("[info] No duplicate issues found.")
+                return
+            self._write_issue_entries(unique_entries)
+            self._refresh_issue_list()
+            self._log(f"[ok] Removed {duplicates} duplicate issue(s) from {self.repo_cfg.issues_file}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to deduplicate issues: {exc}")
 
     def refresh_devices(self) -> None:
         self.device_list = list_input_devices(self.config.device_allowlist, self.config.device_denylist)
