@@ -1,0 +1,1 @@
+- [x] Double-click any issue in Pending/Completed/Waitlist to edit its text inline and persist the change back to `.voice/voice-issues.md`.

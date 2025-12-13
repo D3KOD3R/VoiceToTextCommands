@@ -29,7 +29,8 @@ import urllib.request
 import wave
 import subprocess
 from pathlib import Path
-from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Listbox, StringVar, BooleanVar, Tk, messagebox, ttk
+from typing import Iterable
+from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk
 from tkinter import scrolledtext
 
 import numpy as np
@@ -524,6 +525,7 @@ class VoiceGUI:
         self.issue_header_labels[bucket] = (header, base_label)
         listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._start_drag(e, b))
         listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
+        listbox.bind("<Double-Button-1>", lambda e, b=bucket: self._on_issue_double_click(e, b))
 
         btn_row = ttk.Frame(column)
         btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
@@ -826,6 +828,85 @@ class VoiceGUI:
             return self.issue_entries_wait
         return None
 
+    def _entry_for_bucket(self, bucket: str, list_index: int) -> tuple[list[int], str] | None:
+        row_map = self._row_map_for_source(bucket)
+        entries = self._entries_for_source(bucket)
+        if row_map is None or entries is None or not (0 <= list_index < len(row_map)):
+            return None
+        entry_idx = row_map[list_index]
+        if 0 <= entry_idx < len(entries):
+            return entries[entry_idx]
+        return None
+
+    def _edit_issue_entry(self, bucket: str, row: int) -> None:
+        entry = self._entry_for_bucket(bucket, row)
+        if not entry:
+            return
+        target_indices, current_text = entry
+        self._open_issue_editor(current_text, target_indices)
+
+    def _on_issue_double_click(self, event, bucket: str) -> None:
+        listbox = self._listbox_for_bucket(bucket)
+        if not listbox:
+            return
+        selection = listbox.curselection()
+        if not selection:
+            row = listbox.nearest(event.y)
+            if row < 0:
+                return
+            listbox.selection_clear(0, END)
+            listbox.selection_set(row)
+            selection = (row,)
+        self._edit_issue_entry(bucket, selection[0])
+
+    def _open_issue_editor(self, initial_text: str, target_indices: list[int]) -> None:
+        editor = Toplevel(self.root)
+        editor.title("Edit issue")
+        editor.transient(self.root)
+        editor.grab_set()
+        frame = ttk.Frame(editor, padding=8)
+        frame.pack(fill=BOTH, expand=True)
+        ttk.Label(frame, text="Edit issue text:").pack(anchor="w")
+        text_widget = scrolledtext.ScrolledText(frame, height=6, wrap="word")
+        text_widget.pack(fill=BOTH, expand=True, pady=(4, 4))
+        text_widget.insert(END, initial_text)
+        text_widget.focus_set()
+
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill=BOTH, pady=(0, 4))
+
+        def _save() -> None:
+            new_text = text_widget.get("1.0", END).strip()
+            if not new_text:
+                messagebox.showwarning("Edit issue", "Issue text cannot be empty.")
+                return
+            try:
+                self._apply_issue_edit(target_indices, new_text)
+            finally:
+                editor.destroy()
+
+        ttk.Button(btn_row, text="Save", command=_save).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(btn_row, text="Cancel", command=editor.destroy).pack(side=LEFT)
+
+    def _apply_issue_edit(self, target_indices: Iterable[int], new_text: str) -> None:
+        try:
+            lines = self._sanitize_issues_file()
+            for idx in set(target_indices):
+                if 0 <= idx < len(lines):
+                    match = re.match(r"^(\s*[-*]\s*\[[^\]]\]\s*)(.*)", lines[idx])
+                    if match:
+                        lines[idx] = f"{match.group(1)}{new_text}"
+                    else:
+                        lines[idx] = f"- [ ] {new_text}"
+            text_out = "\n".join(lines)
+            if text_out and not text_out.endswith("\n"):
+                text_out += "\n"
+            self.repo_cfg.issues_file.write_text(text_out, encoding="utf-8")
+            self._refresh_issue_list()
+            self._log(f"[ok] Updated issue text in {self.repo_cfg.issues_file}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to update issue text: {exc}")
+
     def _state_char_for_target(self, target: str) -> str | None:
         if target == "pending":
             return " "
@@ -842,6 +923,15 @@ class VoiceGUI:
             return "done"
         if widget in (self.issue_listbox_wait,):
             return "wait"
+        return None
+
+    def _listbox_for_bucket(self, bucket: str) -> Listbox | None:
+        if bucket == "pending":
+            return self.issue_listbox
+        if bucket == "done":
+            return self.issue_listbox_done
+        if bucket == "wait":
+            return self.issue_listbox_wait
         return None
 
     def _expand_issue_selection(self, listbox: Listbox | None, row_map: list[int]) -> None:
