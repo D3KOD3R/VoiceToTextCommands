@@ -616,12 +616,7 @@ class VoiceGUI:
     def _build_transcript_panel(self) -> None:
         transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        header = ttk.Frame(transcript_frame)
-        header.pack(fill=BOTH, expand=False)
-        ttk.Label(header, text="Speech output (from server):").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(header, text="Start server", command=self._start_realtime_server).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(header, text="Stop server", command=self._stop_realtime_server).pack(side=LEFT, padx=(0, 4))
-        ttk.Label(header, textvariable=self.realtime_status_var).pack(side=LEFT, padx=(6, 0))
+        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
