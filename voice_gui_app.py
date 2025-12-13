@@ -469,47 +469,33 @@ class VoiceGUI:
         # Controls block (everything above the log)
         self.controls_frame.pack(fill=BOTH, expand=False)
 
-        header = ttk.Frame(self.controls_frame)
-        header.pack(fill=BOTH, **pad)
-        left_header = ttk.Frame(header)
-        left_header.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(left_header, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        layout_row = ttk.Frame(self.controls_frame)
+        layout_row.pack(fill=BOTH, expand=True, **pad)
+
+        left_panel = ttk.Frame(layout_row)
+        left_panel.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 12))
+        header = ttk.Frame(left_panel)
+        header.pack(fill=BOTH)
+        ttk.Label(header, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         info = (
             f"Repo: {self.repo_cfg.repo_path}\n"
             f"Issues: {self.repo_cfg.issues_file}\n"
             f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
         )
-        self.info_label = ttk.Label(self.controls_frame, text=info, justify=LEFT)
+        self.info_label = ttk.Label(header, text=info, justify=LEFT)
+        self.info_label.pack(anchor="w", pady=(4, 0))
 
-        info_row = ttk.Frame(self.controls_frame)
-        info_row.pack(fill=BOTH, padx=10, pady=(0, 6))
-        self.info_label.pack(in_=info_row, anchor="w")
+        settings_block = ttk.Frame(left_panel)
+        settings_block.pack(fill=BOTH, expand=False, pady=(6, 0))
+        self._build_settings_panel(settings_block, pad)
+        self._build_audio_panel(left_panel, pad)
+        self._build_transcript_panel(left_panel)
+        self._build_action_buttons(left_panel, pad)
+        self.status_var.pack(in_=left_panel, anchor="w", **pad)
 
-        issues_panel = ttk.Frame(self.controls_frame, padding=(8, 0, 0, 0))
-        issues_panel.pack(side=RIGHT, fill=BOTH, expand=True)
-        self._build_move_buttons(issues_panel)
-
-        lists_row = ttk.Frame(issues_panel)
-        lists_row.pack(fill=BOTH, expand=True)
-
-        self._build_issue_column(lists_row, "Pending issues:", "pending")
-        self._build_issue_column(lists_row, "Completed issues:", "done")
-        self._build_issue_column(lists_row, "Waitlist issues:", "wait")
-
-        ttk.Checkbutton(
-            issues_panel,
-            text="Skip delete confirmation",
-            variable=self.skip_delete_confirm,
-        ).pack(anchor="w", pady=(2, 0))
-
-        self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
-
-        self._build_settings_panel(pad)
-        self._build_audio_panel(pad)
-        self._build_transcript_panel()
-        self._build_action_buttons(pad)
-
-        self.status_var.pack(in_=self.controls_frame, anchor="w", **pad)
+        issues_panel = ttk.Frame(layout_row, width=420)
+        issues_panel.pack(side=RIGHT, fill=BOTH, expand=False)
+        self._build_issues_panel(issues_panel)
 
         # Log block
         log_frame = ttk.Frame(self.root)
@@ -564,28 +550,28 @@ class VoiceGUI:
             )
             ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
 
-    def _build_settings_panel(self, pad: dict[str, int]) -> None:
-        self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
+    def _build_settings_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        self.test_cta_btn.pack(in_=parent, fill=BOTH, padx=10, pady=(4, 4))
 
-        hk_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        hk_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
         ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
         ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
 
-        path_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         path_row.pack(fill=BOTH, **pad)
         ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(path_row, textvariable=self.repo_path_var, width=70).pack(side=LEFT, padx=(0, 10))
 
-        issue_path_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        issue_path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
         ttk.Button(issue_path_row, text="Apply settings", command=self._apply_settings).pack(side=LEFT)
 
-        device_row = ttk.Frame(self.controls_frame, padding=(2, 1, 2, 1))
+        device_row = ttk.Frame(parent, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
         if self.device_list:
@@ -596,32 +582,32 @@ class VoiceGUI:
         ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
         self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
 
-    def _build_audio_panel(self, pad: dict[str, int]) -> None:
-        test_row = ttk.Frame(self.controls_frame, padding=(6, 4, 6, 4))
+    def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        test_row = ttk.Frame(parent, padding=(6, 4, 6, 4))
         test_row.pack(fill=BOTH, **pad)
         self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
 
-        meter_row = ttk.Frame(self.controls_frame)
+        meter_row = ttk.Frame(parent)
         meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
         self.level_canvas.pack(in_=meter_row, side=LEFT, padx=(0, 0))
 
-        wf_header = ttk.Frame(self.controls_frame)
+        wf_header = ttk.Frame(parent)
         wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
         self.test_canvas.config(height=280)
-        self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
+        self.test_canvas.pack(in_=parent, fill=BOTH, expand=True, padx=10, pady=(0, 5))
 
-    def _build_transcript_panel(self) -> None:
-        transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+    def _build_transcript_panel(self, parent: ttk.Frame) -> None:
+        transcript_frame = ttk.Frame(parent, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
         ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
-    def _build_action_buttons(self, pad: dict[str, int]) -> None:
-        btn_row = ttk.Frame(self.controls_frame)
+    def _build_action_buttons(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        btn_row = ttk.Frame(parent)
         btn_row.pack(fill=BOTH, **pad)
         self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
         self.stop_btn.pack(in_=btn_row, side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
