@@ -31,7 +31,7 @@ import wave
 import subprocess
 from pathlib import Path
 from typing import Iterable
-from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk
+from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk, filedialog
 from tkinter import scrolledtext
 
 import numpy as np
@@ -421,7 +421,6 @@ class VoiceGUI:
         self.selected_device_hostapi: int | None = self.device_list[0].get("hostapi") if self.device_list else None
         self.controls_frame = ttk.Frame(self.root)
         self.status_var: ttk.Label | None = None
-        self.level_canvas: Canvas | None = None
         self.log_widget: scrolledtext.ScrolledText | None = None
         self.live_indicator: ttk.Label | None = None
         self.start_btn: ttk.Button | None = None
@@ -449,7 +448,6 @@ class VoiceGUI:
         self._drag_info: dict | None = None
         self.waterfall_status: ttk.Label | None = None
         self.transcript_listener: TranscriptListener | None = None
-        self.info_label: ttk.Label | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
@@ -471,23 +469,12 @@ class VoiceGUI:
         build_layout_structure(self)
 
     def _build_header(self, parent: ttk.Frame) -> None:
-        """Render the app title plus repo context in a consistent block."""
+        """Render the app title in a consistent block."""
         ttk.Label(parent, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        info_row = ttk.Frame(parent)
-        info_row.pack(fill=BOTH, padx=6, pady=(4, 0))
-        self.info_label = ttk.Label(info_row, text=self._render_info_text(), justify=LEFT)
-        self.info_label.pack(anchor="w")
 
     def _build_status_label(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         self.status_var = ttk.Label(parent, text="Ready")
         self.status_var.pack(anchor="w", **pad)
-
-    def _render_info_text(self) -> str:
-        return (
-            f"Repo: {self.repo_cfg.repo_path}\n"
-            f"Issues: {self.repo_cfg.issues_file}\n"
-            f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
-        )
 
     def _build_log_block(self, parent: Tk) -> None:
         log_frame = ttk.Frame(parent)
@@ -580,6 +567,7 @@ class VoiceGUI:
             width=70,
         )
         self.repo_combo.pack(side=LEFT, padx=(0, 10))
+        ttk.Button(path_row, text="Browse...", width=8, command=self._browse_repo_path).pack(side=LEFT, padx=(0, 6))
         self._update_repo_combo_values(current_repo=self.repo_cfg.repo_path)
 
         issue_path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
@@ -608,14 +596,9 @@ class VoiceGUI:
         self.live_indicator.pack(side=LEFT, padx=(4, 0))
 
     def _build_live_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        level_frame = ttk.Frame(parent, padding=(6, 4, 6, 4))
-        level_frame.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=(0, 4))
-        ttk.Label(level_frame, text="Level").pack(anchor="w")
-        self.level_canvas = Canvas(level_frame, width=40, height=80, bg="#1e1e1e", highlightthickness=0)
-        self.level_canvas.pack(side=LEFT, pady=(4, 0))
-
+        parent.columnconfigure(0, weight=1)
         live_output_frame = ttk.Frame(parent, padding=(6, 4, 6, 4))
-        live_output_frame.grid(row=0, column=1, sticky="nsew")
+        live_output_frame.grid(row=0, column=0, sticky="nsew")
         live_output_frame.columnconfigure(0, weight=1)
         ttk.Label(live_output_frame, text="Live speech output:").pack(anchor="w")
         self.live_transcript_widget = scrolledtext.ScrolledText(live_output_frame, height=5, state=DISABLED)
@@ -664,18 +647,9 @@ class VoiceGUI:
         self.log_widget.see(END)
         self.log_widget.config(state=DISABLED)
 
-    def _append_live_transcript(self, text: str) -> None:
-        if not self.live_transcript_widget or not text:
-            return
-        self.live_transcript_widget.config(state=NORMAL)
-        self.live_transcript_widget.insert(END, text.strip() + "\n")
-        self.live_transcript_widget.see(END)
-        self.live_transcript_widget.config(state=DISABLED)
-
     def _handle_transcript_message(self, text: str) -> None:
-        if not text:
-            return
-        self.root.after(0, lambda: self._append_live_transcript(text))
+        # Live transcript pane is reserved for future playback; ignore incoming text.
+        return
 
     def _start_transcript_listener(self) -> None:
         if not self.config.realtime_ws_url:
@@ -1286,8 +1260,6 @@ class VoiceGUI:
             self.hotkey_quit_var.set(self.config.hotkey_quit)
             self.repo_path_var.set(str(self.repo_cfg.repo_path))
             self.issues_path_var.set(str(self.repo_cfg.issues_file))
-            if self.info_label:
-                self.info_label.config(text=self._render_info_text())
             # Re-register hotkeys with new combos
             if keyboard:
                 try:
@@ -1301,6 +1273,17 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to apply settings: {exc}")
 
+    def _browse_repo_path(self) -> None:
+        try:
+            selected = filedialog.askdirectory(initialdir=str(self.repo_cfg.repo_path))
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Repo selection cancelled: {exc}")
+            return
+        if not selected:
+            return
+        self.repo_path_var.set(selected)
+        if self.repo_combo:
+            self.repo_combo.set(selected)
     def _load_repo_history(self) -> list[str]:
         try:
             if not REPO_HISTORY_PATH.exists():
@@ -1523,8 +1506,6 @@ class VoiceGUI:
             self._log(f"[info] Using recording {self.tmp_wav.name} ({dur:.2f}s)")
             transcript = transcribe_with_whisper_cpp(self.tmp_wav, self.config)
             self._send_transcript_to_server(transcript)
-            if transcript.strip():
-                self._append_live_transcript(f"[local] {transcript.strip()}")
             issues = split_issues(transcript, self.config.next_issue_phrases, self.config.stop_phrases)
             unique_issues = self._deduplicate_issues(issues)
             if len(unique_issues) != len(issues):
@@ -1714,7 +1695,6 @@ class VoiceGUI:
         canvas = self.test_canvas
         if self.mic_tester.is_testing():
             level = self.mic_tester.level
-            self._draw_level_bar(level)
             self._push_waterfall(level)
             self._draw_test_history(self.waterfall_history, threshold=self.mic_tester.threshold)
             if test_btn:
@@ -1725,7 +1705,6 @@ class VoiceGUI:
                 self.waterfall_status.config(text=f"Waterfall: mic test ({self.selected_device_name})")
         elif self.recorder and self.recorder.is_recording():
             level = self.recorder.level
-            self._draw_level_bar(level)
             self._push_waterfall(level)
             self._draw_test_history(self.waterfall_history)
             if test_btn:
@@ -1735,7 +1714,6 @@ class VoiceGUI:
             if self.waterfall_status:
                 self.waterfall_status.config(text="Waterfall: recording")
         else:
-            self._draw_level_bar(0.0)
             if canvas:
                 canvas.delete("all")
             if test_btn:
@@ -1771,19 +1749,6 @@ class VoiceGUI:
             th = threshold if threshold is not None else 0.1
             color = "#4caf50" if level > th else "#888888"
             canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
-
-    def _draw_level_bar(self, level: float) -> None:
-        canvas = self.level_canvas
-        if not canvas:
-            return
-        canvas.delete("all")
-        width = int(canvas.winfo_width() or canvas["width"])
-        height = int(canvas.winfo_height() or 80)
-        level = max(0.0, min(1.0, level))
-        bar_height = int(level * height)
-        y0 = height - bar_height
-        color = "#4caf50" if level > 0.1 else "#888888"
-        canvas.create_rectangle(2, y0, width - 2, height - 2, fill=color, outline="")
 
     def run(self) -> None:
         self.root.mainloop()
