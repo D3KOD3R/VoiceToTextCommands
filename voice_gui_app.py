@@ -53,6 +53,7 @@ from voice_issue_daemon import (
     append_issues_incremental,
     split_issues,
 )
+from voice_gui_layout import build_layout_structure
 
 
 NOISY_NAMES = re.compile(r"(hands[- ]?free|hf audio|bthhfenum|telephony|communications|loopback|primary sound capture)", re.I)
@@ -414,15 +415,15 @@ class VoiceGUI:
         self.selected_device_name: str = self.device_list[0]["name"] if self.device_list else "None"
         self.selected_device_hostapi: int | None = self.device_list[0].get("hostapi") if self.device_list else None
         self.controls_frame = ttk.Frame(self.root)
-        self.status_var = ttk.Label(self.controls_frame, text="Ready")
-        self.level_canvas = Canvas(self.controls_frame, width=40, height=80, bg="#1e1e1e", highlightthickness=0)
+        self.status_var: ttk.Label | None = None
+        self.level_canvas: Canvas | None = None
         self.log_widget: scrolledtext.ScrolledText | None = None
-        self.live_indicator = ttk.Label(self.controls_frame, text="Idle", foreground="white", background="#666666", padding=6)
-        self.start_btn = ttk.Button(self.controls_frame, text="Start Recording", command=self.start_recording)
-        self.stop_btn = ttk.Button(self.controls_frame, text="Stop & Transcribe", command=self.stop_recording, state=DISABLED)
-        self.test_cta_btn = ttk.Button(self.controls_frame, text="Test Selected Mic", command=self.toggle_mic_test)
-        self.test_btn = ttk.Button(self.controls_frame, text="Test Selected Mic", command=self.toggle_mic_test)
-        self.test_canvas = Canvas(self.controls_frame, height=80, bg="#1e1e1e", highlightthickness=0)
+        self.live_indicator: ttk.Label | None = None
+        self.start_btn: ttk.Button | None = None
+        self.stop_btn: ttk.Button | None = None
+        self.test_cta_btn: ttk.Button | None = None
+        self.test_btn: ttk.Button | None = None
+        self.test_canvas: Canvas | None = None
         self.hotkey_indicator = None
         self.hotkey_registered = False
         self.device_label = None
@@ -447,12 +448,7 @@ class VoiceGUI:
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
-        self.device_combo = ttk.Combobox(
-            self.controls_frame,
-            values=[f"{d['id']}: {d['name']}" for d in self.device_list],
-            state="readonly",
-            width=45,  # just enough to show the selected device name
-        )
+        self.device_combo: ttk.Combobox | None = None
 
         self._build_layout()
         self._ensure_keyboard_module()
@@ -464,171 +460,171 @@ class VoiceGUI:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_layout(self) -> None:
-        pad = {"padx": 8, "pady": 4}
+        build_layout_structure(self)
 
-        # Controls block (everything above the log)
-        self.controls_frame.pack(fill=BOTH, expand=False)
+    def _build_header(self, parent: ttk.Frame) -> None:
+        """Render the app title plus repo context in a consistent block."""
+        ttk.Label(parent, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        info_row = ttk.Frame(parent)
+        info_row.pack(fill=BOTH, padx=6, pady=(4, 0))
+        self.info_label = ttk.Label(info_row, text=self._render_info_text(), justify=LEFT)
+        self.info_label.pack(anchor="w")
 
-        header = ttk.Frame(self.controls_frame)
-        header.pack(fill=BOTH, **pad)
-        left_header = ttk.Frame(header)
-        left_header.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(left_header, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        info = (
+    def _build_status_label(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        self.status_var = ttk.Label(parent, text="Ready")
+        self.status_var.pack(anchor="w", **pad)
+
+    def _render_info_text(self) -> str:
+        return (
             f"Repo: {self.repo_cfg.repo_path}\n"
             f"Issues: {self.repo_cfg.issues_file}\n"
             f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
         )
-        self.info_label = ttk.Label(self.controls_frame, text=info, justify=LEFT)
 
-        issues_panel = ttk.Frame(header, padding=(8, 0, 0, 0))
-        issues_panel.pack(side=RIGHT, fill=BOTH, expand=True)
-        move_all_row = ttk.Frame(issues_panel)
+    def _build_log_block(self, parent: Tk) -> None:
+        log_frame = ttk.Frame(parent)
+        log_frame.pack(fill=BOTH, expand=False, padx=10, pady=(0, 10))
+        ttk.Label(log_frame, text="Log:").pack(anchor="w")
+        self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
+        self.log_widget.pack(fill=BOTH, expand=False, pady=(2, 0))
+        self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
+
+    def _build_move_buttons(self, parent: ttk.Frame) -> None:
+        move_all_row = ttk.Frame(parent)
         move_all_row.pack(fill=BOTH, expand=False, pady=(0, 4))
         ttk.Label(move_all_row, text="Move selected to:").pack(side=LEFT, padx=(0, 6))
         ttk.Button(move_all_row, text="Pending", command=self._mark_any_pending).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
 
-        lists_row = ttk.Frame(issues_panel)
-        lists_row.pack(fill=BOTH, expand=True)
-
-        pending_frame = ttk.Frame(lists_row, padding=(0, 0, 4, 0))
-        pending_frame.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(pending_frame, text="Pending issues:").pack(anchor="w")
-        self.issue_listbox = Listbox(
-            pending_frame,
+    def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
+        column = ttk.Frame(parent, padding=(4, 0, 0, 0))
+        column.pack(side=LEFT, fill=BOTH, expand=True)
+        ttk.Label(column, text=label).pack(anchor="w")
+        listbox = Listbox(
+            column,
             height=16,
-            width=40,
             selectmode="extended",
             exportselection=False,
         )
-        self.issue_listbox.pack(fill=BOTH, expand=True, pady=(2, 4))
-        self.issue_listbox.bind("<<ListboxSelect>>", self._on_pending_select)
-        self.issue_listbox.bind("<ButtonPress-1>", lambda e: self._start_drag(e, "pending"))
-        self.issue_listbox.bind("<ButtonRelease-1>", lambda e: self._finish_drag(e, "pending"))
-        pending_btn_row = ttk.Frame(pending_frame)
-        pending_btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
-        ttk.Button(pending_btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(pending_btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
+        listbox.pack(fill=BOTH, expand=True, pady=(2, 4))
+        if bucket == "pending":
+            self.issue_listbox = listbox
+            listbox.bind("<<ListboxSelect>>", self._on_pending_select)
+        elif bucket == "done":
+            self.issue_listbox_done = listbox
+            listbox.bind("<<ListboxSelect>>", self._on_done_select)
+        else:
+            self.issue_listbox_wait = listbox
+            listbox.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
+        listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._start_drag(e, b))
+        listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
 
-        done_frame = ttk.Frame(lists_row, padding=(4, 0, 0, 0))
-        done_frame.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(done_frame, text="Completed issues:").pack(anchor="w")
-        self.issue_listbox_done = Listbox(
-            done_frame,
-            height=16,
-            width=40,
-            selectmode="extended",
-            exportselection=False,
-        )
-        self.issue_listbox_done.pack(fill=BOTH, expand=True, pady=(2, 4))
-        self.issue_listbox_done.bind("<<ListboxSelect>>", self._on_done_select)
-        self.issue_listbox_done.bind("<ButtonPress-1>", lambda e: self._start_drag(e, "done"))
-        self.issue_listbox_done.bind("<ButtonRelease-1>", lambda e: self._finish_drag(e, "done"))
-        done_btn_row = ttk.Frame(done_frame)
-        done_btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
-        ttk.Button(done_btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(done_btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
+        btn_row = ttk.Frame(column)
+        btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
+        if bucket == "pending":
+            ttk.Button(btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
+            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
+        elif bucket == "done":
+            ttk.Button(btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
+            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
+        else:
+            ttk.Button(btn_row, text="Select all", command=lambda: self._select_all_list(self.issue_listbox_wait)).pack(
+                side=LEFT, padx=(0, 4)
+            )
+            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
 
-        wait_frame = ttk.Frame(lists_row, padding=(4, 0, 0, 0))
-        wait_frame.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(wait_frame, text="Waitlist issues:").pack(anchor="w")
-        self.issue_listbox_wait = Listbox(
-            wait_frame,
-            height=16,
-            width=40,
-            selectmode="extended",
-            exportselection=False,
-        )
-        self.issue_listbox_wait.pack(fill=BOTH, expand=True, pady=(2, 4))
-        self.issue_listbox_wait.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
-        self.issue_listbox_wait.bind("<ButtonPress-1>", lambda e: self._start_drag(e, "wait"))
-        self.issue_listbox_wait.bind("<ButtonRelease-1>", lambda e: self._finish_drag(e, "wait"))
-        wait_btn_row = ttk.Frame(wait_frame)
-        wait_btn_row.pack(fill=BOTH, expand=False, pady=(0, 2))
-        ttk.Button(wait_btn_row, text="Select all", command=lambda: self._select_all_list(self.issue_listbox_wait)).pack(
-            side=LEFT, padx=(0, 4)
-        )
-        ttk.Button(wait_btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
+    def _build_settings_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        self.test_cta_btn = ttk.Button(parent, text="Test Selected Mic", command=self.toggle_mic_test)
+        self.test_cta_btn.pack(fill=BOTH, padx=10, pady=(4, 4))
 
-        ttk.Checkbutton(
-            issues_panel,
-            text="Skip delete confirmation",
-            variable=self.skip_delete_confirm,
-        ).pack(anchor="w", pady=(2, 0))
-
-        self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
-
-        hk_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        hk_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
         ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
         ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
 
-        path_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         path_row.pack(fill=BOTH, **pad)
         ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(path_row, textvariable=self.repo_path_var, width=70).pack(side=LEFT, padx=(0, 10))
 
-        issue_path_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        issue_path_row = ttk.Frame(parent, padding=(6, 2, 6, 2))
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
         ttk.Button(issue_path_row, text="Apply settings", command=self._apply_settings).pack(side=LEFT)
 
-        device_row = ttk.Frame(self.controls_frame, padding=(2, 1, 2, 1))
+        device_row = ttk.Frame(parent, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
+        values = [f"{d['id']}: {d['name']}" for d in self.device_list]
+        self.device_combo = ttk.Combobox(
+            device_row,
+            values=values,
+            state="readonly",
+            width=45,
+        )
         if self.device_list:
             self.device_combo.current(0)
             self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-        self.device_combo.config(width=30)
         self.device_combo.pack(side=LEFT, padx=(4, 6), fill="x", expand=True)
         ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
-        self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
+        self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
+        self.live_indicator.pack(side=LEFT, padx=(4, 0))
 
-        test_row = ttk.Frame(self.controls_frame, padding=(6, 4, 6, 4))
+    def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        test_row = ttk.Frame(parent, padding=(6, 4, 6, 4))
         test_row.pack(fill=BOTH, **pad)
-        self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
+        self.test_btn = ttk.Button(test_row, text="Test Selected Mic", command=self.toggle_mic_test)
+        self.test_btn.pack(side=LEFT, padx=(0, 10), pady=2)
 
-        meter_row = ttk.Frame(self.controls_frame)
+        meter_row = ttk.Frame(parent)
         meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
-        self.level_canvas.pack(in_=meter_row, side=LEFT, padx=(0, 0))
+        self.level_canvas = Canvas(meter_row, width=40, height=80, bg="#1e1e1e", highlightthickness=0)
+        self.level_canvas.pack(side=LEFT, padx=(0, 0))
 
-        wf_header = ttk.Frame(self.controls_frame)
+        wf_header = ttk.Frame(parent)
         wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
-        self.test_canvas.config(height=280)
-        self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
+        self.test_canvas = Canvas(parent, height=280, bg="#1e1e1e", highlightthickness=0)
+        self.test_canvas.pack(fill=BOTH, expand=True, padx=10, pady=(0, 5))
 
-        info_row = ttk.Frame(self.controls_frame)
-        info_row.pack(fill=BOTH, padx=10, pady=(0, 6))
-        self.info_label.pack(in_=info_row, anchor="w")
-
-        transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+    def _build_transcript_panel(self, parent: ttk.Frame) -> None:
+        transcript_frame = ttk.Frame(parent, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
         ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
         self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
         self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
 
-        btn_row = ttk.Frame(self.controls_frame)
+    def _build_action_buttons(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
+        btn_row = ttk.Frame(parent)
         btn_row.pack(fill=BOTH, **pad)
-        self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
-        self.stop_btn.pack(in_=btn_row, side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
+        self.start_btn = ttk.Button(btn_row, text="Start Recording", command=self.start_recording)
+        self.start_btn.pack(side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
+        self.stop_btn = ttk.Button(btn_row, text="Stop & Transcribe", command=self.stop_recording, state=DISABLED)
+        self.stop_btn.pack(side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
 
-        self.status_var.pack(in_=self.controls_frame, anchor="w", **pad)
+    def _build_issues_panel(self, parent: ttk.Frame) -> None:
+        panel = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        panel.pack(fill=BOTH, expand=True)
+        self._build_move_buttons(panel)
 
-        # Log block
-        log_frame = ttk.Frame(self.root)
-        log_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
-        ttk.Label(log_frame, text="Log:").pack(anchor="w")
-        self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
-        self.log_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
-        self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
+        lists_row = ttk.Frame(panel)
+        lists_row.pack(fill=BOTH, expand=True)
+
+        self._build_issue_column(lists_row, "Pending issues:", "pending")
+        self._build_issue_column(lists_row, "Completed issues:", "done")
+        self._build_issue_column(lists_row, "Waitlist issues:", "wait")
+
+        ttk.Checkbutton(
+            panel,
+            text="Skip delete confirmation",
+            variable=self.skip_delete_confirm,
+        ).pack(anchor="w", pady=(2, 0))
 
     def _log(self, msg: str) -> None:
         if not self.log_widget:
@@ -1081,13 +1077,8 @@ class VoiceGUI:
             self.hotkey_quit_var.set(self.config.hotkey_quit)
             self.repo_path_var.set(str(self.repo_cfg.repo_path))
             self.issues_path_var.set(str(self.repo_cfg.issues_file))
-            info = (
-                f"Repo: {self.repo_cfg.repo_path}\n"
-                f"Issues: {self.repo_cfg.issues_file}\n"
-                f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
-            )
             if self.info_label:
-                self.info_label.config(text=info)
+                self.info_label.config(text=self._render_info_text())
             # Re-register hotkeys with new combos
             if keyboard:
                 try:
@@ -1151,9 +1142,12 @@ class VoiceGUI:
 
     def refresh_devices(self) -> None:
         self.device_list = list_input_devices(self.config.device_allowlist, self.config.device_denylist)
-        self.device_combo["values"] = [f"{d['id']}: {d['name']}" for d in self.device_list]
+        combo = self.device_combo
+        if combo:
+            combo["values"] = [f"{d['id']}: {d['name']}" for d in self.device_list]
         if self.device_list:
-            self.device_combo.current(0)
+            if combo:
+                combo.current(0)
             self.selected_device_id = self.device_list[0]["id"]
             self.selected_device_name = self.device_list[0]["name"]
             self.selected_device_hostapi = self.device_list[0].get("hostapi")
@@ -1168,6 +1162,8 @@ class VoiceGUI:
             self._log("[info] Mic test stopped due to device refresh.")
 
     def on_device_change(self, event=None) -> None:  # type: ignore[override]
+        if not self.device_combo:
+            return
         sel = self.device_combo.get()
         if sel:
             self.selected_device_id = int(sel.split(":")[0])
@@ -1198,16 +1194,21 @@ class VoiceGUI:
             self.tmp_wav = tmp_path
             self.waterfall_history = []
             self._start_recorder_with_fallbacks()
-            self.start_btn.config(state=DISABLED)
-            self.stop_btn.config(state=NORMAL)
-            self.status_var.config(text="Recording...")
-            self.live_indicator.config(text="Mic LIVE", background="#c1121f", foreground="white")
+            if self.start_btn:
+                self.start_btn.config(state=DISABLED)
+            if self.stop_btn:
+                self.stop_btn.config(state=NORMAL)
+            if self.status_var:
+                self.status_var.config(text="Recording...")
+            if self.live_indicator:
+                self.live_indicator.config(text="Mic LIVE", background="#c1121f", foreground="white")
             if self.hotkey_registered:
                 self._set_hotkey_indicator("Recording (hotkey ready)", "#c1121f")
             self._log("[info] Recording... press Stop & Transcribe when done.")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to start recording: {exc}")
-            self.status_var.config(text="Error")
+            if self.status_var:
+                self.status_var.config(text="Error")
             self._remove_tmp_wav()
             self.recorder = None
             self.tmp_wav = None
@@ -1218,7 +1219,8 @@ class VoiceGUI:
         keep_path = None
         try:
             self.recorder.stop()
-            self.status_var.config(text="Transcribing...")
+            if self.status_var:
+                self.status_var.config(text="Transcribing...")
             self._log("[info] Recording stopped. Transcribing...")
             if not self.tmp_wav:
                 raise RuntimeError("Temp WAV missing.")
@@ -1235,8 +1237,10 @@ class VoiceGUI:
                 append_issues_incremental(writer, issues)
                 self._log(f"[ok] Appended {len(issues)} issue(s) to {self.repo_cfg.issues_file}")
                 self._refresh_issue_list()
-            self.status_var.config(text="Ready")
-            self.live_indicator.config(text="Idle", background="#666666", foreground="white")
+            if self.status_var:
+                self.status_var.config(text="Ready")
+            if self.live_indicator:
+                self.live_indicator.config(text="Idle", background="#666666", foreground="white")
             if self.hotkey_registered:
                 self._set_hotkey_indicator(f"Hotkey ready: {self.config.hotkey_toggle}", "#2274a5")
             # Only delete after successful transcription path
@@ -1251,7 +1255,8 @@ class VoiceGUI:
             self._log(f"[error] {exc}")
             if keep_path:
                 self._log(f"[warn] Keeping temp WAV for inspection: {keep_path}")
-            self.status_var.config(text="Error")
+            if self.status_var:
+                self.status_var.config(text="Error")
         finally:
             if keep_path is None:
                 self._remove_tmp_wav()
@@ -1259,8 +1264,10 @@ class VoiceGUI:
             self.tmp_wav = None
             self.recorder = None
             self.waterfall_history = []
-            self.start_btn.config(state=NORMAL)
-            self.stop_btn.config(state=DISABLED)
+            if self.start_btn:
+                self.start_btn.config(state=NORMAL)
+            if self.stop_btn:
+                self.stop_btn.config(state=DISABLED)
 
     def _start_recorder_with_fallbacks(self) -> None:
         # Find working sample rates via check_input_settings, then try to start with each (and channels fallback)
@@ -1402,13 +1409,18 @@ class VoiceGUI:
 
 
     def _poll_level(self) -> None:
+        test_btn = self.test_btn
+        cta_btn = self.test_cta_btn
+        canvas = self.test_canvas
         if self.mic_tester.is_testing():
             level = self.mic_tester.level
             self._draw_level_bar(level)
             self._push_waterfall(level)
             self._draw_test_history(self.waterfall_history, threshold=self.mic_tester.threshold)
-            self.test_btn.config(text="Stop Test")
-            self.test_cta_btn.config(text="Stop Test")
+            if test_btn:
+                test_btn.config(text="Stop Test")
+            if cta_btn:
+                cta_btn.config(text="Stop Test")
             if self.waterfall_status:
                 self.waterfall_status.config(text=f"Waterfall: mic test ({self.selected_device_name})")
         elif self.recorder and self.recorder.is_recording():
@@ -1416,15 +1428,20 @@ class VoiceGUI:
             self._draw_level_bar(level)
             self._push_waterfall(level)
             self._draw_test_history(self.waterfall_history)
-            self.test_btn.config(text="Test Selected Mic")
-            self.test_cta_btn.config(text="Test Selected Mic")
+            if test_btn:
+                test_btn.config(text="Test Selected Mic")
+            if cta_btn:
+                cta_btn.config(text="Test Selected Mic")
             if self.waterfall_status:
                 self.waterfall_status.config(text="Waterfall: recording")
         else:
             self._draw_level_bar(0.0)
-            self.test_canvas.delete("all")
-            self.test_btn.config(text="Test Selected Mic")
-            self.test_cta_btn.config(text="Test Selected Mic")
+            if canvas:
+                canvas.delete("all")
+            if test_btn:
+                test_btn.config(text="Test Selected Mic")
+            if cta_btn:
+                cta_btn.config(text="Test Selected Mic")
             self.waterfall_history = []
             if self.waterfall_status:
                 self.waterfall_status.config(text="Waterfall: idle")
@@ -1436,6 +1453,8 @@ class VoiceGUI:
 
     def _draw_test_history(self, history: list[float], threshold: float | None = None) -> None:
         canvas = self.test_canvas
+        if not canvas:
+            return
         canvas.delete("all")
         if not history:
             return
@@ -1455,6 +1474,8 @@ class VoiceGUI:
 
     def _draw_level_bar(self, level: float) -> None:
         canvas = self.level_canvas
+        if not canvas:
+            return
         canvas.delete("all")
         width = int(canvas.winfo_width() or canvas["width"])
         height = int(canvas.winfo_height() or 80)
