@@ -479,8 +479,7 @@ class VoiceGUI:
             f"Issues: {self.repo_cfg.issues_file}\n"
             f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
         )
-        self.info_label = ttk.Label(left_header, text=info, justify=LEFT)
-        self.info_label.pack(anchor="w", pady=(4, 0))
+        self.info_label = ttk.Label(self.controls_frame, text=info, justify=LEFT)
 
         issues_panel = ttk.Frame(header, padding=(8, 0, 0, 0))
         issues_panel.pack(side=RIGHT, fill=BOTH, expand=True)
@@ -605,6 +604,10 @@ class VoiceGUI:
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
         self.test_canvas.config(height=280)
         self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
+
+        info_row = ttk.Frame(self.controls_frame)
+        info_row.pack(fill=BOTH, padx=10, pady=(0, 6))
+        self.info_label.pack(in_=info_row, anchor="w")
 
         transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
         transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
