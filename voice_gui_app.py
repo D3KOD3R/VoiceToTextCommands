@@ -24,6 +24,7 @@ import textwrap
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 import wave
@@ -34,6 +35,7 @@ from tkinter import scrolledtext
 
 import numpy as np
 import sounddevice as sd
+import tkinter.font as tkfont
 
 try:
     import keyboard  # type: ignore
@@ -444,6 +446,8 @@ class VoiceGUI:
         self.transcript_listener: TranscriptListener | None = None
         self.realtime_proc: subprocess.Popen | None = None
         self.realtime_status_var = StringVar(value="Server: stopped")
+        self.wrap_width = 70
+        self._wrap_font = None
         self.info_label: ttk.Label | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
@@ -461,9 +465,12 @@ class VoiceGUI:
         self.root.after(100, self._poll_level)
         self._register_hotkeys()
         self._refresh_issue_list()
+        if self.config.realtime_auto_start:
+            self._start_realtime_server()
         self._start_transcript_listener()
         self._cleanup_tmp_dir()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Configure>", lambda e: self._maybe_resize_wrap())
 
     def _build_layout(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -471,21 +478,95 @@ class VoiceGUI:
         # Controls block (everything above the log)
         self.controls_frame.pack(fill=BOTH, expand=False)
 
-        header = ttk.Frame(self.controls_frame)
-        header.pack(fill=BOTH, **pad)
-        left_header = ttk.Frame(header)
-        left_header.pack(side=LEFT, fill=BOTH, expand=True)
-        ttk.Label(left_header, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        title_row = ttk.Frame(self.controls_frame)
+        title_row.pack(fill=BOTH, **pad)
+        ttk.Label(title_row, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(side=LEFT, anchor="w")
+
+        top_split = ttk.Frame(self.controls_frame)
+        top_split.pack(fill=BOTH, expand=False, **pad)
+
+        left_cfg = ttk.Frame(top_split)
+        left_cfg.pack(side=LEFT, fill=BOTH, expand=True)
+
+        right_info = ttk.Frame(top_split, padding=(12, 0, 0, 0))
+        right_info.pack(side=LEFT, fill=BOTH, expand=True)
+
+        self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
+
+        hk_row = ttk.Frame(left_cfg, padding=(6, 2, 6, 2))
+        hk_row.pack(fill=BOTH, **pad)
+        ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
+        ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
+        ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
+        ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
+
+        path_row = ttk.Frame(left_cfg, padding=(6, 2, 6, 2))
+        path_row.pack(fill=BOTH, **pad)
+        ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
+        ttk.Entry(path_row, textvariable=self.repo_path_var, width=70).pack(side=LEFT, padx=(0, 10))
+
+        issue_path_row = ttk.Frame(left_cfg, padding=(6, 2, 6, 2))
+        issue_path_row.pack(fill=BOTH, **pad)
+        ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
+        ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
+        ttk.Button(issue_path_row, text="Apply settings", command=self._apply_settings).pack(side=LEFT)
+
+        device_row = ttk.Frame(left_cfg, padding=(2, 1, 2, 1))
+        device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
+        ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
+        if self.device_list:
+            self.device_combo.current(0)
+            self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
+        self.device_combo.config(width=30)
+        self.device_combo.pack(side=LEFT, padx=(4, 6), fill="x", expand=True)
+        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
+        self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
+
+        test_row = ttk.Frame(left_cfg, padding=(6, 4, 6, 4))
+        test_row.pack(fill=BOTH, **pad)
+        self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
+
+        meter_row = ttk.Frame(left_cfg)
+        meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
+        self.level_canvas.pack(in_=meter_row, side=LEFT, padx=(0, 0))
+
+        wf_header = ttk.Frame(left_cfg)
+        wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
+        ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
+        self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
+        self.waterfall_status.pack(side=LEFT, padx=(8, 0))
+        self.test_canvas.config(height=280)
+        self.test_canvas.pack(in_=left_cfg, fill=BOTH, expand=True, padx=10, pady=(0, 5))
+
+        transcript_frame = ttk.Frame(left_cfg, padding=(6, 2, 6, 2))
+        transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
+        header_row = ttk.Frame(transcript_frame)
+        header_row.pack(fill=BOTH, expand=False)
+        ttk.Label(header_row, text="Speech output (from server):").pack(side=LEFT, padx=(0, 6))
+        ttk.Button(header_row, text="Start server", command=self._start_realtime_server).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(header_row, text="Stop server", command=self._stop_realtime_server).pack(side=LEFT, padx=(0, 4))
+        ttk.Label(header_row, textvariable=self.realtime_status_var).pack(side=LEFT, padx=(6, 0))
+        self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
+        self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
+
+        btn_row = ttk.Frame(left_cfg)
+        btn_row.pack(fill=BOTH, **pad)
+        self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
+        self.stop_btn.pack(in_=btn_row, side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
+
+        self.status_var.pack(in_=left_cfg, anchor="w", **pad)
+
         info = (
             f"Repo: {self.repo_cfg.repo_path}\n"
             f"Issues: {self.repo_cfg.issues_file}\n"
             f"Hotkeys (daemon): start/stop {self.config.hotkey_toggle}, quit {self.config.hotkey_quit}"
         )
-        self.info_label = ttk.Label(left_header, text=info, justify=LEFT)
-        self.info_label.pack(anchor="w", pady=(4, 0))
+        self.info_label = ttk.Label(right_info, text=info, justify=LEFT)
+        self.info_label.pack(anchor="nw", pady=(10, 0))
 
-        issues_panel = ttk.Frame(header, padding=(8, 0, 0, 0))
-        issues_panel.pack(side=RIGHT, fill=BOTH, expand=True)
+        # Issues panel across full width
+        issues_panel = ttk.Frame(self.controls_frame, padding=(0, 0, 0, 0))
+        issues_panel.pack(fill=BOTH, expand=True, padx=6, pady=(6, 2))
         move_all_row = ttk.Frame(issues_panel)
         move_all_row.pack(fill=BOTH, expand=False, pady=(0, 4))
         ttk.Label(move_all_row, text="Move selected to:").pack(side=LEFT, padx=(0, 6))
@@ -502,7 +583,6 @@ class VoiceGUI:
         self.issue_listbox = Listbox(
             pending_frame,
             height=16,
-            width=40,
             selectmode="extended",
             exportselection=False,
         )
@@ -521,7 +601,6 @@ class VoiceGUI:
         self.issue_listbox_done = Listbox(
             done_frame,
             height=16,
-            width=40,
             selectmode="extended",
             exportselection=False,
         )
@@ -540,7 +619,6 @@ class VoiceGUI:
         self.issue_listbox_wait = Listbox(
             wait_frame,
             height=16,
-            width=40,
             selectmode="extended",
             exportselection=False,
         )
@@ -560,71 +638,6 @@ class VoiceGUI:
             text="Skip delete confirmation",
             variable=self.skip_delete_confirm,
         ).pack(anchor="w", pady=(2, 0))
-
-        self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
-
-        hk_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
-        hk_row.pack(fill=BOTH, **pad)
-        ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
-        ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
-
-        path_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
-        path_row.pack(fill=BOTH, **pad)
-        ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(path_row, textvariable=self.repo_path_var, width=70).pack(side=LEFT, padx=(0, 10))
-
-        issue_path_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
-        issue_path_row.pack(fill=BOTH, **pad)
-        ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
-        ttk.Button(issue_path_row, text="Apply settings", command=self._apply_settings).pack(side=LEFT)
-
-        device_row = ttk.Frame(self.controls_frame, padding=(2, 1, 2, 1))
-        device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
-        ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
-        if self.device_list:
-            self.device_combo.current(0)
-            self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-        self.device_combo.config(width=30)
-        self.device_combo.pack(side=LEFT, padx=(4, 6), fill="x", expand=True)
-        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
-        self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
-
-        test_row = ttk.Frame(self.controls_frame, padding=(6, 4, 6, 4))
-        test_row.pack(fill=BOTH, **pad)
-        self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
-
-        meter_row = ttk.Frame(self.controls_frame)
-        meter_row.pack(fill=BOTH, padx=10, pady=(2, 2))
-        self.level_canvas.pack(in_=meter_row, side=LEFT, padx=(0, 0))
-
-        wf_header = ttk.Frame(self.controls_frame)
-        wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
-        ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
-        self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
-        self.waterfall_status.pack(side=LEFT, padx=(8, 0))
-        self.test_canvas.config(height=280)
-        self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
-
-        transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
-        transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
-        header_row = ttk.Frame(transcript_frame)
-        header_row.pack(fill=BOTH, expand=False)
-        ttk.Label(header_row, text="Speech output (from server):").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(header_row, text="Start server", command=self._start_realtime_server).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(header_row, text="Stop server", command=self._stop_realtime_server).pack(side=LEFT, padx=(0, 4))
-        ttk.Label(header_row, textvariable=self.realtime_status_var).pack(side=LEFT, padx=(6, 0))
-        self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
-        self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
-
-        btn_row = ttk.Frame(self.controls_frame)
-        btn_row.pack(fill=BOTH, **pad)
-        self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
-        self.stop_btn.pack(in_=btn_row, side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
-
-        self.status_var.pack(in_=self.controls_frame, anchor="w", **pad)
 
         # Log block
         log_frame = ttk.Frame(self.root)
@@ -764,7 +777,7 @@ class VoiceGUI:
             self._log(f"[warn] Unable to read issues file {self.repo_cfg.issues_file}: {exc}")
 
     def _populate_issue_listbox(self, listbox: Listbox, entries: list[tuple[list[int], str]], row_map: list[int]) -> None:
-        wrap_width = 70
+        wrap_width = max(20, self.wrap_width)
         for idx, (_, text) in enumerate(entries):
             wrapped = textwrap.wrap(text, width=wrap_width) or [text]
             for j, line in enumerate(wrapped):
@@ -893,6 +906,23 @@ class VoiceGUI:
                     listbox.select_set(idx)
         finally:
             self._listbox_select_guard = False
+
+    def _maybe_resize_wrap(self) -> None:
+        listbox = self.issue_listbox
+        if not listbox:
+            return
+        try:
+            width_px = listbox.winfo_width()
+            if width_px <= 0:
+                return
+            font = self._wrap_font or tkfont.nametofont("TkDefaultFont")
+            char_w = font.measure("0") or 8
+            new_width = max(20, int(width_px / char_w) - 2)
+            if abs(new_width - self.wrap_width) >= 3:
+                self.wrap_width = new_width
+                self._refresh_issue_list()
+        except Exception:
+            pass
 
     def _select_all_pending(self) -> None:
         if self.issue_listbox:

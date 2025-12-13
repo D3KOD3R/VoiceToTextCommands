@@ -27,6 +27,7 @@
   },
   "realtime": {
     "wsUrl": "ws://localhost:8000/ws",
-    "postUrl": "http://localhost:8000/transcript"
+    "postUrl": "http://localhost:8000/transcript",
+    "autoStart": false
   }
 }
