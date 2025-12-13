@@ -17,12 +17,16 @@
     "nextIssue": ["next issue", "next point"],
     "stop": ["end issues", "stop issues"]
   },
-    "stt": {
-        "provider": "whisper_cpp",
-        "binaryPath": ".tools/whisper/whisper-cli.exe",
-        "model": ".tools/whisper/ggml-base.en.bin",
-        "language": "en",
-        "inputSamplerate": null,
-        "inputChannels": null
-    }
+  "stt": {
+    "provider": "whisper_cpp",
+    "binaryPath": ".tools/whisper/whisper-cli.exe",
+    "model": ".tools/whisper/ggml-base.en.bin",
+    "language": "en",
+    "inputSamplerate": null,
+    "inputChannels": null
+  },
+  "realtime": {
+    "wsUrl": "ws://localhost:8000/ws",
+    "postUrl": "http://localhost:8000/transcript"
+  }
 }

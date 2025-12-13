@@ -1,3 +1,7 @@
 keyboard
 sounddevice
 numpy
+fastapi
+uvicorn
+websockets
+pydantic

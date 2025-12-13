@@ -9,6 +9,7 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - GUI recorder with mic selection and live level (whisper.cpp backend).
 - GUI mic test with waterfall meter to confirm the mic is working.
 - Manage issue states in the GUI (mark pending as done, undo completed items, delete, waitlist bucket with drag/drop, skip delete confirms, and wrap long text).
+- Optional realtime transcript relay server (FastAPI/Docker) that feeds a speech output window in the GUI.
 - Hotkey daemon for quick capture via whisper.cpp.
 - Optional GitHub bridge: push unchecked voice issues to GitHub using the `gh` CLI.
 - One-click installer to fetch whisper.cpp binary/model into the repo and set config.
@@ -39,6 +40,14 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - Preview: `python sync_github_issues.py --list` (shows GitHub issues) and `python sync_github_issues.py` (shows pending backlog items without creating anything).
 - Create issues: `python sync_github_issues.py --apply --label voice` (uses `gh issue create`, adds `(gh#123)` tags back into `.voice/voice-issues.md` unless `--no-annotate`).
 - Throttle with `--limit N`. Requires GitHub CLI (`gh`) to be installed and authenticated.
+
+## Realtime transcript server (optional)
+- Start locally (no Docker): `uvicorn speech_server:app --host 0.0.0.0 --port 8000`
+- Or build/run via Docker:  
+  `docker build -f Dockerfile.speech-server -t voice-transcript-server .`  
+  `docker run --rm -p 8000:8000 voice-transcript-server`
+- Configure the GUI to listen/post in `.voice_config.json` (defaults are `ws://localhost:8000/ws` and `http://localhost:8000/transcript` under `"realtime"`).
+- The GUI speech output window will show any transcript strings posted to `/transcript`; it reconnects automatically if the server restarts.
 
 ## Files
 - `.voice/voice-issues.md` – living checklist (voice-captured).

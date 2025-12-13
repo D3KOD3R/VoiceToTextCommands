@@ -16,6 +16,7 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sys
@@ -23,6 +24,8 @@ import textwrap
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import wave
 import subprocess
 from pathlib import Path
@@ -345,6 +348,55 @@ def transcribe_with_whisper_cpp(audio_file: Path, config) -> str:
     return provider.transcribe_file(audio_file)
 
 
+class TranscriptListener:
+    """Background websocket listener to stream transcripts into the GUI."""
+
+    def __init__(self, url: str, on_message, on_log) -> None:
+        self.url = url
+        self.on_message = on_message
+        self.on_log = on_log
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread or not self.url:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
+
+    def _run(self) -> None:
+        try:
+            import websockets  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            self.on_log(f"[warn] Realtime disabled: websockets import failed ({exc})")
+            return
+        asyncio.run(self._listen(websockets))
+
+    async def _listen(self, websockets) -> None:  # type: ignore[override]
+        backoff = 1
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
+                    self.on_log(f"[info] Connected to realtime server: {self.url}")
+                    backoff = 1
+                    while not self._stop.is_set():
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=1)
+                        except asyncio.TimeoutError:
+                            continue
+                        self.on_message(msg)
+            except Exception as exc:  # noqa: BLE001
+                if self._stop.is_set():
+                    break
+                self.on_log(f"[warn] Realtime reconnecting in {backoff}s: {exc}")
+                await asyncio.sleep(backoff)
+                backoff = min(10, backoff * 2)
 class VoiceGUI:
     def __init__(self) -> None:
         self.config = ConfigLoader.load(DEFAULT_CONFIG_PATH)
@@ -388,6 +440,8 @@ class VoiceGUI:
         self.skip_delete_confirm = BooleanVar(value=False)
         self._drag_info: dict | None = None
         self.waterfall_status: ttk.Label | None = None
+        self.transcript_widget: scrolledtext.ScrolledText | None = None
+        self.transcript_listener: TranscriptListener | None = None
         self.info_label: ttk.Label | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
@@ -405,6 +459,7 @@ class VoiceGUI:
         self.root.after(100, self._poll_level)
         self._register_hotkeys()
         self._refresh_issue_list()
+        self._start_transcript_listener()
         self._cleanup_tmp_dir()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -551,6 +606,12 @@ class VoiceGUI:
         self.test_canvas.config(height=280)
         self.test_canvas.pack(in_=self.controls_frame, fill=BOTH, expand=True, padx=10, pady=(0, 5))
 
+        transcript_frame = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
+        transcript_frame.pack(fill=BOTH, expand=False, padx=6, pady=(2, 4))
+        ttk.Label(transcript_frame, text="Speech output (from server):").pack(anchor="w")
+        self.transcript_widget = scrolledtext.ScrolledText(transcript_frame, height=5, state=DISABLED)
+        self.transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
+
         btn_row = ttk.Frame(self.controls_frame)
         btn_row.pack(fill=BOTH, **pad)
         self.start_btn.pack(in_=btn_row, side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
@@ -573,6 +634,43 @@ class VoiceGUI:
         self.log_widget.insert(END, msg + "\n")
         self.log_widget.see(END)
         self.log_widget.config(state=DISABLED)
+
+    def _append_transcript(self, text: str) -> None:
+        if not self.transcript_widget or not text:
+            return
+        self.transcript_widget.config(state=NORMAL)
+        self.transcript_widget.insert(END, text.strip() + "\n")
+        self.transcript_widget.see(END)
+        self.transcript_widget.config(state=DISABLED)
+
+    def _handle_transcript_message(self, text: str) -> None:
+        if not text:
+            return
+        self.root.after(0, lambda: self._append_transcript(text))
+
+    def _start_transcript_listener(self) -> None:
+        if not self.config.realtime_ws_url:
+            return
+        self.transcript_listener = TranscriptListener(
+            self.config.realtime_ws_url,
+            on_message=self._handle_transcript_message,
+            on_log=lambda m: self.root.after(0, lambda: self._log(m)),
+        )
+        self.transcript_listener.start()
+
+    def _send_transcript_to_server(self, text: str) -> None:
+        if not text or not self.config.realtime_post_url:
+            return
+        payload = json.dumps({"text": text}).encode("utf-8")
+        req = urllib.request.Request(
+            self.config.realtime_post_url, data=payload, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status >= 300:
+                    self._log(f"[warn] Realtime server returned {resp.status}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to send transcript to server: {exc}")
 
     def _refresh_issue_list(self) -> None:
         try:
@@ -1125,6 +1223,7 @@ class VoiceGUI:
             dur = validate_recording(self.tmp_wav)
             self._log(f"[info] Using recording {self.tmp_wav.name} ({dur:.2f}s)")
             transcript = transcribe_with_whisper_cpp(self.tmp_wav, self.config)
+            self._send_transcript_to_server(transcript)
             issues = split_issues(transcript, self.config.next_issue_phrases, self.config.stop_phrases)
             if not issues:
                 self._log("[info] No issues detected.")
@@ -1438,6 +1537,11 @@ class VoiceGUI:
         try:
             if keyboard:
                 keyboard.unhook_all()
+        except Exception:
+            pass
+        try:
+            if self.transcript_listener:
+                self.transcript_listener.stop()
         except Exception:
             pass
         try:

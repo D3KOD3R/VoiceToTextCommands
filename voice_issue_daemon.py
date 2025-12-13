@@ -52,6 +52,8 @@ class VoiceConfig:
     hotkey_quit: str
     device_allowlist: List[str]
     device_denylist: List[str]
+    realtime_ws_url: Optional[str]
+    realtime_post_url: Optional[str]
 
     @classmethod
     def from_json(cls, data: dict) -> "VoiceConfig":
@@ -63,6 +65,7 @@ class VoiceConfig:
         stt = data.get("stt") or {}
         hotkeys = data.get("hotkeys") or {}
         devices = data.get("devices") or {}
+        realtime = data.get("realtime") or {}
         return cls(
             repos=repos,
             default_repo=default_repo,
@@ -78,6 +81,8 @@ class VoiceConfig:
             hotkey_quit=hotkeys.get("quit", "ctrl+alt+q"),
             device_allowlist=devices.get("allowlist") or [],
             device_denylist=devices.get("denylist") or [],
+            realtime_ws_url=realtime.get("wsUrl"),
+            realtime_post_url=realtime.get("postUrl"),
         )
 
 
