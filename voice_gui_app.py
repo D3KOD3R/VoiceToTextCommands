@@ -506,17 +506,6 @@ class VoiceGUI:
 
         self.test_cta_btn.pack(in_=self.controls_frame, fill=BOTH, padx=10, pady=(4, 4))
 
-        device_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
-        device_row.pack(fill="x", expand=False, pady=(2, 2))
-        ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
-        if self.device_list:
-            self.device_combo.current(0)
-            self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-        self.device_combo.config(width=30)
-        self.device_combo.pack(side=LEFT, padx=(4, 6), fill="x", expand=True)
-        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
-        self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
-
         hk_row = ttk.Frame(self.controls_frame, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
         ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
@@ -538,6 +527,17 @@ class VoiceGUI:
         audio_block = ttk.Frame(self.controls_frame, padding=(6, 0, 6, 4))
         audio_block.pack(fill=BOTH, expand=True)
 
+        device_row = ttk.Frame(audio_block, padding=(2, 1, 2, 1))
+        device_row.pack(fill="x", expand=False, pady=(0, 4))
+        ttk.Label(device_row, text="Input device:").pack(side=LEFT, padx=(0, 6))
+        if self.device_list:
+            self.device_combo.current(0)
+            self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
+        self.device_combo.config(width=30)
+        self.device_combo.pack(side=LEFT, padx=(4, 6), fill="x", expand=True)
+        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).pack(side=LEFT, padx=(0, 6))
+        self.live_indicator.pack(in_=device_row, side=LEFT, padx=(4, 0))
+
         test_row = ttk.Frame(audio_block, padding=(6, 4, 6, 4))
         test_row.pack(fill=BOTH)
         self.test_btn.pack(in_=test_row, side=LEFT, padx=(0, 10), pady=2)
@@ -551,7 +551,7 @@ class VoiceGUI:
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
-        self.test_canvas.config(height=320)
+        self.test_canvas.config(height=280)
         self.test_canvas.pack(in_=audio_block, fill=BOTH, expand=True, pady=(0, 5))
 
         btn_row = ttk.Frame(self.controls_frame)
