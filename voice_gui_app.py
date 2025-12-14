@@ -484,8 +484,6 @@ class VoiceGUI:
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
         self.repo_hint_var = StringVar(value="")
-        self.repo_path_var.trace_add("write", lambda *args: self._update_repo_hint())
-        self.issues_path_var.trace_add("write", lambda *args: self._update_repo_hint())
         self.repo_hint_label: ttk.Label | None = None
         self.device_combo: ttk.Combobox | None = None
         self.repo_combo: ttk.Combobox | None = None
@@ -493,6 +491,10 @@ class VoiceGUI:
         self.dark_mode_var = BooleanVar(value=False)
         self.style = ttk.Style(self.root)
         self.static_info_label: ttk.Label | None = None
+        self._repo_path_trace_guard = False
+        self.repo_path_var.trace_add("write", self._on_repo_path_value_changed)
+        self.issues_path_var.trace_add("write", lambda *args: self._update_repo_hint())
+        self._on_repo_path_value_changed()
 
         self._build_layout()
         self._update_theme()
@@ -1458,6 +1460,32 @@ class VoiceGUI:
             self.issues_info_label.config(text=issues_text)
         self._update_repo_hint()
 
+    def _on_repo_path_value_changed(self, *args) -> None:
+        if self._repo_path_trace_guard:
+            return
+        self._repo_path_trace_guard = True
+        try:
+            repo_text = self.repo_path_var.get().strip()
+            if not repo_text:
+                self.repo_hint_var.set("Select a repository path to see voice-file hints.")
+                return
+            repo_path = Path(repo_text).expanduser()
+            try:
+                repo_path = repo_path.resolve()
+            except Exception:
+                pass
+            candidate = repo_path / ".voice" / "voice-issues.md"
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                resolved = candidate
+            new_path = str(resolved)
+            if self.issues_path_var.get() != new_path:
+                self.issues_path_var.set(new_path)
+            self._refresh_static_info()
+        finally:
+            self._repo_path_trace_guard = False
+
     def _update_repo_hint(self) -> None:
         if not self.repo_hint_label:
             return
@@ -1475,9 +1503,11 @@ class VoiceGUI:
         if not issues_path.is_absolute():
             issues_path = (repo_path / issues_path).resolve()
         if issues_path.exists():
-            self.repo_hint_var.set(f"Existing `.voice/voice-issues.md` detected at {issues_path.name}; using that file.")
+            self.repo_hint_var.set(f"Existing voice issues log detected at {issues_path}; using that file.")
         else:
-            self.repo_hint_var.set("No voice issues log found for this repo; click Create voice file to bootstrap `.voice/voice-issues.md`.")
+            self.repo_hint_var.set(
+                f"No voice issues log found at {issues_path}; click Create voice file to bootstrap `.voice/voice-issues.md`."
+            )
 
     def _browse_repo_path(self) -> None:
         try:
