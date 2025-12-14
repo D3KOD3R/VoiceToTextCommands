@@ -485,6 +485,9 @@ class VoiceGUI:
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
         self.repo_hint_var = StringVar(value="")
         self.repo_hint_label: ttk.Label | None = None
+        self.hotkey_info_label: ttk.Label | None = None
+        self.repo_info_label: ttk.Label | None = None
+        self.issues_info_label: ttk.Label | None = None
         self.device_combo: ttk.Combobox | None = None
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
