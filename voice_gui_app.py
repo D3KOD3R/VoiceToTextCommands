@@ -68,6 +68,34 @@ NOISY_NAMES = re.compile(r"(hands[- ]?free|hf audio|bthhfenum|telephony|communic
 WATERFALL_WINDOW = 50  # number of samples to display (~5s at 10 Hz poll)
 WAIT_STATE_CHAR = "~"
 
+LIGHT_THEME = {
+    "root_bg": "#f3f5fb",
+    "panel_bg": "#ffffff",
+    "element_bg": "#eef2fa",
+    "entry_bg": "#ffffff",
+    "list_bg": "#ffffff",
+    "canvas_bg": "#041a2d",
+    "fg": "#111828",
+    "accent": "#2274a5",
+    "select_bg": "#2274a5",
+    "select_fg": "#ffffff",
+    "border": "#d0d7e6",
+}
+
+DARK_THEME = {
+    "root_bg": "#080b10",
+    "panel_bg": "#101828",
+    "element_bg": "#1f2634",
+    "entry_bg": "#1e2431",
+    "list_bg": "#111827",
+    "canvas_bg": "#03060f",
+    "fg": "#f4f7fb",
+    "accent": "#4caf50",
+    "select_bg": "#33a7c5",
+    "select_fg": "#ffffff",
+    "border": "#2b3241",
+}
+
 
 def normalize_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", name.lower())
@@ -455,12 +483,19 @@ class VoiceGUI:
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
+        self.repo_hint_var = StringVar(value="")
+        self.repo_path_var.trace_add("write", lambda *args: self._update_repo_hint())
+        self.issues_path_var.trace_add("write", lambda *args: self._update_repo_hint())
+        self.repo_hint_label: ttk.Label | None = None
         self.device_combo: ttk.Combobox | None = None
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
+        self.dark_mode_var = BooleanVar(value=False)
+        self.style = ttk.Style(self.root)
         self.static_info_label: ttk.Label | None = None
 
         self._build_layout()
+        self._update_theme()
         self._ensure_keyboard_module()
         self.root.after(100, self._poll_level)
         self._register_hotkeys()
@@ -595,12 +630,23 @@ class VoiceGUI:
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
+        ttk.Label(issue_path_row, text="🗣️", font=("Segoe UI Emoji", 12)).pack(side=LEFT, padx=(0, 4))
         ttk.Button(
             issue_path_row,
             text="Create voice file",
             width=16,
             command=self._create_voice_file_for_selected_repo,
         ).pack(side=LEFT, padx=(0, 6))
+
+        hint_row = ttk.Frame(left_col, padding=(6, 0, 6, 2))
+        hint_row.pack(fill="x", **pad)
+        self.repo_hint_label = ttk.Label(
+            hint_row,
+            textvariable=self.repo_hint_var,
+            wraplength=460,
+            justify=LEFT,
+        )
+        self.repo_hint_label.pack(anchor="w")
 
         apply_btn = ttk.Button(left_col, text="Apply settings", command=self._apply_settings, width=18)
         apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
@@ -611,6 +657,14 @@ class VoiceGUI:
         self.repo_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
         self.issues_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
         self.issues_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
+        theme_row = ttk.Frame(right_col, padding=(6, 2, 6, 2))
+        theme_row.pack(fill="x", padx=(6, 4), pady=(4, 0))
+        ttk.Checkbutton(
+            theme_row,
+            text="Dark mode",
+            variable=self.dark_mode_var,
+            command=self._update_theme,
+        ).pack(side=LEFT)
 
         device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
@@ -633,6 +687,57 @@ class VoiceGUI:
         self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
         self.live_indicator.grid(row=0, column=3, sticky="e", padx=(0, 0))
         self._refresh_static_info()
+        self._update_theme()
+
+    def _current_palette(self) -> dict[str, str]:
+        return DARK_THEME if self.dark_mode_var.get() else LIGHT_THEME
+
+    def _update_theme(self) -> None:
+        palette = self._current_palette()
+        try:
+            self.style.theme_use("clam")
+        except Exception:
+            pass
+        self.style.configure("TFrame", background=palette["panel_bg"])
+        self.style.configure("TLabel", background=palette["panel_bg"], foreground=palette["fg"])
+        self.style.configure("TButton", background=palette["element_bg"], foreground=palette["fg"])
+        self.style.configure("TCheckbutton", background=palette["panel_bg"], foreground=palette["fg"])
+        self.style.configure("TEntry", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
+        self.style.configure("TCombobox", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
+        self.root.configure(background=palette["root_bg"])
+        for lb in (self.issue_listbox, self.issue_listbox_done, self.issue_listbox_wait):
+            if lb:
+                lb.configure(
+                    background=palette["list_bg"],
+                    foreground=palette["fg"],
+                    selectbackground=palette["select_bg"],
+                    selectforeground=palette["select_fg"],
+                    highlightbackground=palette["border"],
+                    activestyle="none",
+                )
+        if self.log_widget:
+            self.log_widget.configure(
+                background=palette["list_bg"],
+                foreground=palette["fg"],
+                insertbackground=palette["fg"],
+            )
+        if self.live_indicator:
+            self.live_indicator.config(background=palette["accent"], foreground="white")
+        if self.test_canvas:
+            self.test_canvas.configure(background=palette["canvas_bg"])
+        if self.repo_hint_label:
+            self.repo_hint_label.config(foreground=palette["accent"])
+        self._draw_test_history(self.waterfall_history)
+
+    def _waterfall_color(self, level: float, palette: dict[str, str]) -> str:
+        val = max(0.0, min(level, 1.0))
+        if val < 0.25:
+            return "#1c4571"
+        if val < 0.5:
+            return "#1d88bc"
+        if val < 0.75:
+            return "#47c7ff"
+        return palette["accent"]
 
     def _build_live_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         parent.columnconfigure(0, weight=1)
@@ -1351,6 +1456,28 @@ class VoiceGUI:
             self.repo_info_label.config(text=repo_text)
         if self.issues_info_label:
             self.issues_info_label.config(text=issues_text)
+        self._update_repo_hint()
+
+    def _update_repo_hint(self) -> None:
+        if not self.repo_hint_label:
+            return
+        repo_text = self.repo_path_var.get().strip()
+        issues_text = self.issues_path_var.get().strip()
+        if not repo_text:
+            self.repo_hint_var.set("Select a repository path to see voice-file hints.")
+            return
+        try:
+            repo_path = Path(repo_text).expanduser().resolve()
+        except Exception:
+            self.repo_hint_var.set("The selected repository path is invalid.")
+            return
+        issues_path = Path(issues_text or "voice-issues.md").expanduser()
+        if not issues_path.is_absolute():
+            issues_path = (repo_path / issues_path).resolve()
+        if issues_path.exists():
+            self.repo_hint_var.set(f"Existing `.voice/voice-issues.md` detected at {issues_path.name}; using that file.")
+        else:
+            self.repo_hint_var.set("No voice issues log found for this repo; click Create voice file to bootstrap `.voice/voice-issues.md`.")
 
     def _browse_repo_path(self) -> None:
         try:
@@ -1538,6 +1665,11 @@ class VoiceGUI:
                 unique_entries.append((state, text))
             if duplicates == 0:
                 self._log("[info] No duplicate issues found.")
+                return
+            confirm = messagebox.askyesno(
+                "Remove duplicates", f"Found {duplicates} duplicate issue(s). Remove them from the current repo?"
+            )
+            if not confirm:
                 return
             self._write_issue_entries(unique_entries)
             self._refresh_issue_list()
@@ -1861,22 +1993,32 @@ class VoiceGUI:
         canvas = self.test_canvas
         if not canvas:
             return
+        palette = self._current_palette()
         canvas.delete("all")
         if not history:
             return
         width = int(canvas.winfo_width() or canvas["width"])
         height = int(canvas.winfo_height() or 80)
-        n = len(history)
-        bar_width = max(2, width // max(1, n))
-        for i, level in enumerate(history[-(width // bar_width) :]):
+        bar_width = max(2, width // max(1, len(history)))
+        max_bars = max(1, width // bar_width)
+        canvas.create_rectangle(0, 0, width, height, fill=palette["canvas_bg"], outline="")
+        for i, level in enumerate(history[-max_bars:]):
             x0 = i * bar_width
             x1 = x0 + bar_width - 1
-            bar_height = int(level * height)
+            bar_height = int(max(0.0, min(level, 1.0)) * height)
             y0 = height - bar_height
             y1 = height
-            th = threshold if threshold is not None else 0.1
-            color = "#4caf50" if level > th else "#888888"
-            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
+            color = self._waterfall_color(level, palette)
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline=color)
+            canvas.create_line(x0, y0, x1 + 1, y0, fill=palette["border"], width=1)
+        for idx in range(1, 4):
+            y = height - idx * (height / 4)
+            canvas.create_line(0, y, width, y, fill=palette["border"], width=1)
+        if threshold is not None:
+            th_val = max(0.0, min(threshold, 1.0))
+            th_y = height - int(th_val * height)
+            canvas.create_line(0, th_y, width, th_y, fill=palette["accent"], dash=(4, 4), width=2)
+        canvas.create_line(0, height - 1, width, height - 1, fill=palette["accent"], width=2)
 
     def run(self) -> None:
         self.root.mainloop()
