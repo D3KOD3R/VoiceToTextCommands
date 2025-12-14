@@ -492,6 +492,9 @@ class VoiceGUI:
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
         self.dark_mode_var = BooleanVar(value=False)
+        self.dark_mode_icon_var = StringVar(value="🌙")
+        self.dark_mode_text_var = StringVar(value="Dark mode")
+        self.dark_mode_icon_label: ttk.Label | None = None
         self.style = ttk.Style(self.root)
         self.static_info_label: ttk.Label | None = None
         self._repo_path_trace_guard = False
@@ -662,15 +665,6 @@ class VoiceGUI:
         self.repo_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
         self.issues_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
         self.issues_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
-        theme_row = ttk.Frame(right_col, padding=(6, 2, 6, 2))
-        theme_row.pack(fill="x", padx=(6, 4), pady=(4, 0))
-        ttk.Checkbutton(
-            theme_row,
-            text="Dark mode",
-            variable=self.dark_mode_var,
-            command=self._update_theme,
-        ).pack(side=LEFT)
-
         device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         device_row.columnconfigure(0, weight=0)
@@ -732,6 +726,9 @@ class VoiceGUI:
             self.test_canvas.configure(background=palette["canvas_bg"])
         if self.repo_hint_label:
             self.repo_hint_label.config(foreground=palette["accent"])
+        if self.dark_mode_icon_label:
+            self.dark_mode_icon_label.config(background=palette["panel_bg"], foreground=palette["accent"])
+        self._refresh_dark_mode_label()
         self._draw_test_history(self.waterfall_history)
 
     def _waterfall_color(self, level: float, palette: dict[str, str]) -> str:
@@ -743,6 +740,12 @@ class VoiceGUI:
         if val < 0.75:
             return "#47c7ff"
         return palette["accent"]
+
+    def _refresh_dark_mode_label(self) -> None:
+        icon = "🌙" if not self.dark_mode_var.get() else "☀️"
+        text = "Dark mode" if not self.dark_mode_var.get() else "Day mode"
+        self.dark_mode_icon_var.set(icon)
+        self.dark_mode_text_var.set(text)
 
     def _build_live_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         parent.columnconfigure(0, weight=1)
@@ -774,6 +777,18 @@ class VoiceGUI:
         panel = ttk.Frame(parent, padding=(8, 0, 0, 0))
         panel.pack(fill=BOTH, expand=True)
         self._build_move_buttons(panel)
+        dark_row = ttk.Frame(panel)
+        dark_row.pack(fill="x", pady=(0, 4))
+        spacer = ttk.Frame(dark_row)
+        spacer.pack(side=LEFT, fill=BOTH, expand=True)
+        self.dark_mode_icon_label = ttk.Label(dark_row, textvariable=self.dark_mode_icon_var, font=("Segoe UI Emoji", 12))
+        self.dark_mode_icon_label.pack(side=RIGHT, padx=(0, 4))
+        ttk.Checkbutton(
+            dark_row,
+            textvariable=self.dark_mode_text_var,
+            variable=self.dark_mode_var,
+            command=self._update_theme,
+        ).pack(side=RIGHT)
 
         lists_row = ttk.Frame(panel)
         lists_row.pack(fill=BOTH, expand=True)
@@ -1485,7 +1500,9 @@ class VoiceGUI:
             new_path = str(resolved)
             if self.issues_path_var.get() != new_path:
                 self.issues_path_var.set(new_path)
+            self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=Path(new_path))
             self._refresh_static_info()
+            self._refresh_issue_list()
         finally:
             self._repo_path_trace_guard = False
 
