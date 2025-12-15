@@ -1,10 +1,11 @@
 {
   "repos": {
-    "/absolute/path/to/VoiceToTextCommands": {
+    "local": {
+      "path": ".",
       "issuesFile": ".voice/voice-issues.md"
     }
   },
-  "defaultRepo": "/absolute/path/to/VoiceToTextCommands",
+  "defaultRepo": "local",
   "hotkeys": {
     "toggle": "ctrl+alt+i",
     "quit": "ctrl+alt+q"
