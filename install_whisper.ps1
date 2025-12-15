@@ -80,22 +80,7 @@ if (-not $NoConfigUpdate) {
     }
 
     # Ensure repos is a dictionary so paths with ':' can be used as keys.
-    if (-not $config.repos) { $config | Add-Member -NotePropertyName repos -NotePropertyValue @{} }
-    if ($config.repos -isnot [System.Collections.IDictionary]) { $config.repos = @{} }
-    if (-not $config.hotkeys) {
-        $config | Add-Member -NotePropertyName hotkeys -NotePropertyValue @{ toggle = "ctrl+alt+i"; quit = "ctrl+alt+q" }
-    }
-    $alias = "local"
-    if (-not $config.repos.Contains($alias)) {
-        $config.repos[$alias] = @{
-            path = "."
-            issuesFile = ".voice/voice-issues.md"
-        }
-    }
-    $config.defaultRepo = $alias
-    if (-not $config.phrases) {
-        $config | Add-Member -NotePropertyName phrases -NotePropertyValue @{ nextIssue = @("next issue","next point"); stop = @("end issues","stop issues") }
-    }
+    # Installer leaves repo aliases to the GUI/daemon so alias metadata stays repo-local.
     if (-not $config.stt) {
         $config | Add-Member -NotePropertyName stt -NotePropertyValue @{}
     }
