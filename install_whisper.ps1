@@ -82,14 +82,17 @@ if (-not $NoConfigUpdate) {
     # Ensure repos is a dictionary so paths with ':' can be used as keys.
     if (-not $config.repos) { $config | Add-Member -NotePropertyName repos -NotePropertyValue @{} }
     if ($config.repos -isnot [System.Collections.IDictionary]) { $config.repos = @{} }
-    if (-not $config.defaultRepo) { $config | Add-Member -NotePropertyName defaultRepo -NotePropertyValue ($repoRoot.ProviderPath) }
     if (-not $config.hotkeys) {
         $config | Add-Member -NotePropertyName hotkeys -NotePropertyValue @{ toggle = "ctrl+alt+i"; quit = "ctrl+alt+q" }
     }
-    $repoKey = $repoRoot.ProviderPath
-    if (-not $config.repos.Contains($repoKey)) {
-        $config.repos[$repoKey] = @{ issuesFile = ".voice/voice-issues.md" }
+    $alias = "local"
+    if (-not $config.repos.Contains($alias)) {
+        $config.repos[$alias] = @{
+            path = "."
+            issuesFile = ".voice/voice-issues.md"
+        }
     }
+    $config.defaultRepo = $alias
     if (-not $config.phrases) {
         $config | Add-Member -NotePropertyName phrases -NotePropertyValue @{ nextIssue = @("next issue","next point"); stop = @("end issues","stop issues") }
     }
@@ -103,9 +106,15 @@ if (-not $NoConfigUpdate) {
     if (Test-Path $cliPath) {
         $binaryPath = $cliPath
     }
-    $config.stt.binaryPath = $binaryPath
-    $config.stt.model = $modelPath
+    $binaryFileName = Split-Path $binaryPath -Leaf
+    $relativeBinary = ".tools/whisper/$binaryFileName"
+    $config.stt.binaryPath = $relativeBinary
+    $relativeModel = ".tools/whisper/$ModelName"
+    $config.stt.model = $relativeModel
     if (-not $config.stt.language) { $config.stt.language = "en" }
+    if (-not $config.realtime) {
+        $config | Add-Member -NotePropertyName realtime -NotePropertyValue @{ wsUrl = $null; postUrl = $null }
+    }
 
     $config | ConvertTo-Json -Depth 6 | Set-Content -Path $configPath -Encoding UTF8
     Write-Host "[ok] Config updated."

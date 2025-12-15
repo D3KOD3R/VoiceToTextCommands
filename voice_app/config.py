@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -35,9 +36,10 @@ class VoiceConfig:
     device_denylist: List[str]
     realtime_ws_url: Optional[str]
     realtime_post_url: Optional[str]
+    repo_root: Path
 
     @classmethod
-    def from_json(cls, data: dict) -> "VoiceConfig":
+    def from_json(cls, data: dict, repo_root: Path) -> "VoiceConfig":
         repos = data.get("repos") or {}
         default_repo = data.get("defaultRepo")
         phrases = data.get("phrases") or {}
@@ -64,10 +66,15 @@ class VoiceConfig:
             device_denylist=devices.get("denylist") or [],
             realtime_ws_url=realtime.get("wsUrl"),
             realtime_post_url=realtime.get("postUrl"),
+            repo_root=repo_root,
         )
 
 
 class ConfigLoader:
+    """Utility helpers for working with the repo-local config."""
+
+    LOCAL_ALIAS_BASE = "local"
+
     @staticmethod
     def load(path: Path = DEFAULT_CONFIG_PATH) -> VoiceConfig:
         if not path.exists():
@@ -76,32 +83,215 @@ class ConfigLoader:
                 data = legacy.read_text(encoding="utf-8-sig")
                 path.write_text(data, encoding="utf-8")
                 print(f"[warn] Migrated legacy config from {legacy} to {path}")
-                return VoiceConfig.from_json(json.loads(data))
+                return VoiceConfig.from_json(json.loads(data), path.resolve().parent)
             raise FileNotFoundError(
                 f"Config not found at {path}. Create it from .voice_config.sample.json in the repo."
             )
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-        return VoiceConfig.from_json(data)
+        raw_text = path.read_text(encoding="utf-8-sig")
+        data = json.loads(raw_text)
+        repo_root = path.resolve().parent
+        if ConfigLoader._migrate_config(data, repo_root):
+            path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
+        return VoiceConfig.from_json(data, repo_root)
 
     @staticmethod
     def select_repo(config: VoiceConfig, explicit_repo: Optional[str]) -> RepoConfig:
         repo_key = explicit_repo or config.default_repo
         if not repo_key:
             raise ValueError("No repo selected and no defaultRepo set in config.")
-        repo_entry = config.repos.get(repo_key)
-        repo_path = Path(repo_key).expanduser().resolve()
-        if not repo_entry:
-            for key, val in config.repos.items():
-                try:
-                    if Path(key).expanduser().resolve() == repo_path:
-                        repo_entry = val
-                        break
-                except Exception:
-                    continue
-        if not repo_entry or "issuesFile" not in repo_entry:
+        repo_root = config.repo_root
+        entry = config.repos.get(repo_key)
+        if entry:
+            return ConfigLoader._build_repo_config(repo_key, entry, repo_root)
+        try:
+            repo_path = Path(repo_key).expanduser().resolve()
+        except Exception:
             raise ValueError(f"Config for repo '{repo_key}' is missing or incomplete.")
-        issues_file = repo_path / repo_entry["issuesFile"]
+        alias = ConfigLoader._find_alias_by_path(config.repos, repo_path, repo_root)
+        if alias:
+            return ConfigLoader._build_repo_config(alias, config.repos[alias], repo_root)
+        issues_file = (repo_path / ".voice" / "voice-issues.md").resolve()
         return RepoConfig(repo_path=repo_path, issues_file=issues_file)
+
+    @staticmethod
+    def ensure_repo_entry(
+        data: dict, repo_root: Path, repo_path: Path, issues_path: Path
+    ) -> str:
+        repos = data.setdefault("repos", {})
+        alias = ConfigLoader._alias_for_path(repos, repo_root, repo_path)
+        entry = repos.setdefault(alias, {})
+        entry.update(ConfigLoader.build_repo_entry(repo_root, repo_path, issues_path))
+        data["defaultRepo"] = alias
+        return alias
+
+    @staticmethod
+    def build_repo_entry(repo_root: Path, repo_path: Path, issues_path: Path) -> dict:
+        return {
+            "path": ConfigLoader._path_for_storage(repo_root, repo_path),
+            "issuesFile": ConfigLoader._issues_for_storage(repo_path, issues_path),
+        }
+
+    @staticmethod
+    def _migrate_config(data: dict, repo_root: Path) -> bool:
+        changed = ConfigLoader._normalize_repos(data, repo_root)
+        changed |= ConfigLoader._ensure_local_repo_alias(data, repo_root)
+        return changed
+
+    @staticmethod
+    def _normalize_repos(data: dict, repo_root: Path) -> bool:
+        repos = data.setdefault("repos", {})
+        changed = False
+        for alias in list(repos.keys()):
+            entry = repos.get(alias)
+            if not isinstance(entry, dict):
+                entry = {}
+                repos[alias] = entry
+                changed = True
+            repo_path = ConfigLoader._resolve_entry_path(alias, entry, repo_root)
+
+            normalized_path = ConfigLoader._path_for_storage(repo_root, repo_path)
+            if entry.get("path") != normalized_path:
+                entry["path"] = normalized_path
+                changed = True
+
+            normalized_issues = ConfigLoader._normalize_issues_entry(repo_path, entry)
+            if entry.get("issuesFile") != normalized_issues:
+                entry["issuesFile"] = normalized_issues
+                changed = True
+
+            new_alias = alias
+            if ConfigLoader._looks_like_path(alias) and repo_path == repo_root:
+                new_alias = ConfigLoader._unique_alias(repos, ConfigLoader.LOCAL_ALIAS_BASE)
+            if new_alias != alias:
+                repos[new_alias] = entry
+                del repos[alias]
+                changed = True
+        return changed
+
+    @staticmethod
+    def _ensure_local_repo_alias(data: dict, repo_root: Path) -> bool:
+        repos = data.setdefault("repos", {})
+        alias = ConfigLoader._find_alias_by_path(repos, repo_root, repo_root)
+        changed = False
+        if not alias:
+            alias = ConfigLoader._unique_alias(repos, ConfigLoader.LOCAL_ALIAS_BASE)
+            repos[alias] = {
+                "path": ".",
+                "issuesFile": ".voice/voice-issues.md",
+            }
+            changed = True
+        else:
+            entry = repos[alias]
+            if entry.get("path") != ".":
+                entry["path"] = "."
+                changed = True
+            normalized_issues = ConfigLoader._normalize_issues_entry(repo_root, entry)
+            if entry.get("issuesFile") != normalized_issues:
+                entry["issuesFile"] = normalized_issues
+                changed = True
+        if data.get("defaultRepo") != alias:
+            data["defaultRepo"] = alias
+            changed = True
+        return changed
+
+    @staticmethod
+    def _build_repo_config(alias: str, entry: dict, repo_root: Path) -> RepoConfig:
+        repo_path = ConfigLoader._resolve_entry_path(alias, entry, repo_root)
+        issues_file = ConfigLoader._resolve_entry_issues(entry, repo_path)
+        return RepoConfig(repo_path=repo_path, issues_file=issues_file)
+
+    @staticmethod
+    def _resolve_entry_path(alias: str, entry: dict, repo_root: Path) -> Path:
+        raw_path = entry.get("path") or alias
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (repo_root / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate
+
+    @staticmethod
+    def _resolve_entry_issues(entry: dict, repo_path: Path) -> Path:
+        raw = entry.get("issuesFile") or ".voice/voice-issues.md"
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = (repo_path / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate
+
+    @staticmethod
+    def _normalize_issues_entry(repo_path: Path, entry: dict) -> str:
+        candidate = ConfigLoader._resolve_entry_issues(entry, repo_path)
+        try:
+            return str(candidate.relative_to(repo_path))
+        except ValueError:
+            return str(candidate)
+
+    @staticmethod
+    def _path_for_storage(repo_root: Path, repo_path: Path) -> str:
+        repo_path = repo_path.resolve()
+        if repo_path == repo_root:
+            return "."
+        try:
+            return str(repo_path.relative_to(repo_root))
+        except ValueError:
+            return str(repo_path)
+
+    @staticmethod
+    def _issues_for_storage(repo_path: Path, issues_path: Path) -> str:
+        candidate = issues_path.resolve()
+        try:
+            return str(candidate.relative_to(repo_path))
+        except ValueError:
+            return str(candidate)
+
+    @staticmethod
+    def _alias_for_path(repos: dict, repo_root: Path, repo_path: Path) -> str:
+        existing = ConfigLoader._find_alias_by_path(repos, repo_path, repo_root)
+        if existing:
+            return existing
+        base = (
+            ConfigLoader.LOCAL_ALIAS_BASE
+            if repo_path.resolve() == repo_root
+            else ConfigLoader._sanitize_alias(repo_path.name or "repo")
+        )
+        return ConfigLoader._unique_alias(repos, base)
+
+    @staticmethod
+    def _find_alias_by_path(repos: dict, target_path: Path, repo_root: Path) -> Optional[str]:
+        for alias, entry in repos.items():
+            try:
+                candidate = ConfigLoader._resolve_entry_path(alias, entry, repo_root)
+            except Exception:
+                continue
+            if candidate == target_path.resolve():
+                return alias
+        return None
+
+    @staticmethod
+    def _sanitize_alias(value: str) -> str:
+        alias = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+        return alias or "repo"
+
+    @staticmethod
+    def _unique_alias(repos: dict, base: str) -> str:
+        candidate = base
+        index = 1
+        while candidate in repos:
+            candidate = f"{base}-{index}"
+            index += 1
+        return candidate
+
+    @staticmethod
+    def _looks_like_path(value: str) -> bool:
+        if not value:
+            return False
+        if value.startswith(".") or value.startswith(".."):
+            return True
+        if ":" in value:
+            return True
+        return any(sep in value for sep in ("/", "\\"))
 
 
 __all__ = [

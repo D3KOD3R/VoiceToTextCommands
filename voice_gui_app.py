@@ -1392,14 +1392,9 @@ class VoiceGUI:
             data["hotkeys"]["toggle"] = toggle
         if quit_key:
             data["hotkeys"]["quit"] = quit_key
-        data.setdefault("repos", {})
-        data["defaultRepo"] = str(repo_path)
-        try:
-            rel_issue = str(issues_path.resolve().relative_to(repo_path))
-            issue_entry = rel_issue
-        except Exception:
-            issue_entry = str(issues_path.resolve())
-        data["repos"][str(repo_path)] = {"issuesFile": issue_entry}
+        ConfigLoader.ensure_repo_entry(
+            data, DEFAULT_CONFIG_PATH.parent, repo_path, issues_path
+        )
 
         try:
             DEFAULT_CONFIG_PATH.write_text(json.dumps(data, indent=4), encoding="utf-8")
@@ -1447,13 +1442,14 @@ class VoiceGUI:
         self.issues_path_var.set(str(issues_path))
         self._ensure_repo_voice_assets(repo_path, issues_path)
         self._record_repo_history(repo_path)
-        try:
-            rel_issue_entry = str(issues_path.resolve().relative_to(repo_path))
-        except Exception:
-            rel_issue_entry = str(issues_path.resolve())
         if self.config:
-            self.config.default_repo = str(repo_path)
-            self.config.repos[str(repo_path)] = {"issuesFile": rel_issue_entry}
+            alias = ConfigLoader.alias_for_path(
+                self.config.repos, self.config.repo_root, repo_path
+            )
+            self.config.default_repo = alias
+            self.config.repos[alias] = ConfigLoader.build_repo_entry(
+                self.config.repo_root, repo_path, issues_path
+            )
         self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=issues_path)
         self.repo_path_var.set(str(repo_path))
         self.issues_path_var.set(str(issues_path))
@@ -2213,7 +2209,10 @@ def main() -> int:
         app.run()
         return 0
     except Exception as exc:  # noqa: BLE001
+        import traceback
+
         print(f"[error] {exc}")
+        traceback.print_exc()
         return 1
 
 

@@ -24,9 +24,9 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
    - whisper.cpp: https://github.com/ggerganov/whisper.cpp
    - Models (GGML/GGUF): https://huggingface.co/ggerganov/whisper.cpp or run `bash ./models/download-ggml-model.sh base` inside whisper.cpp.
 3) Copy `.voice_config.sample.json` to `.voice_config.json` (in this repo) and set:
-   - `repos`: map your repo path to `.voice/voice-issues.md`.
-   - `stt.binaryPath`: path to `main`/`main.exe`.
-   - `stt.model`: path to your GGML/GGUF model.
+   - `repos`: assign an alias (the sample uses `"local"`) with `path": "."` and `issuesFile": ".voice/voice-issues.md"` so the loader stays repo-agnostic.
+   - `stt.binaryPath`: keep the path relative to the repo (e.g., `.tools/whisper/whisper-cli.exe` or `main.exe`).
+   - `stt.model`: the relative path to your GGML/GGUF model inside the repo.
    - `stt.language`: optional (e.g., `en`).
    - If you just pulled the repo: `git submodule update --init --recursive` to fetch `whisper.cpp`.
 4) Capture issues (from audio):  
