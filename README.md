@@ -16,6 +16,7 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - Optional GitHub bridge: push unchecked voice issues to GitHub using the `gh` CLI.
 - One-click installer to fetch whisper.cpp binary/model into the repo and set config.
 - Test transcription helper (HF whisper) for quick verification.
+- Product ideas go straight into the GUI’s Waitlist bucket so marketing-ready concepts stay visible without an extra file.
 
 ## Quick start
 1) Clone and enter the repo.

@@ -46,125 +46,31 @@ except Exception:  # noqa: BLE001
 ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
 AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
-VOICE_WORKFLOW_SOURCE = ROOT / "VOICE_ISSUE_WORKFLOW.md"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from voice_issue_daemon import (
-    ConfigLoader,
-    DEFAULT_CONFIG_PATH,
-    IssueWriter,
-    RepoConfig,
-    WhisperCppProvider,
-    append_issues_incremental,
-    split_issues,
+from .config import ConfigLoader, DEFAULT_CONFIG_PATH
+from .services.audio import (
+    Recorder,
+    MicTester,
+    list_input_devices,
+    hostapi_priority,
+    normalize_name,
+    NOISY_NAMES,
+    WATERFALL_WINDOW,
 )
-from voice_gui_layout import build_layout_structure
+from .services.issues import IssueWriter, append_issues_incremental
+from .services.realtime import TranscriptListener
+from .services.transcription import split_issues, transcribe_with_whisper_cpp
+from .ui.components import VoiceUIComponents
+from .ui.layout import build_layout_structure
+from .ui import styles
+from .bootstrap import ensure_whisper_assets
 
 
-NOISY_NAMES = re.compile(r"(hands[- ]?free|hf audio|bthhfenum|telephony|communications|loopback|primary sound capture)", re.I)
-WATERFALL_WINDOW = 50  # number of samples to display (~5s at 10 Hz poll)
 WAIT_STATE_CHAR = "~"
-
-LIGHT_THEME = {
-    "root_bg": "#f3f5fb",
-    "panel_bg": "#ffffff",
-    "element_bg": "#eef2fa",
-    "entry_bg": "#ffffff",
-    "list_bg": "#ffffff",
-    "canvas_bg": "#041a2d",
-    "fg": "#111828",
-    "accent": "#2274a5",
-    "select_bg": "#2274a5",
-    "select_fg": "#ffffff",
-    "border": "#d0d7e6",
-}
-
-DARK_THEME = {
-    "root_bg": "#080b10",
-    "panel_bg": "#101828",
-    "element_bg": "#1f2634",
-    "entry_bg": "#1e2431",
-    "list_bg": "#111827",
-    "canvas_bg": "#03060f",
-    "fg": "#f4f7fb",
-    "accent": "#4caf50",
-    "select_bg": "#33a7c5",
-    "select_fg": "#ffffff",
-    "border": "#2b3241",
-}
-
-
-def normalize_name(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", name.lower())
-
-
-def hostapi_priority(idx: int | None, hostapis: list[dict] | None = None) -> int:
-    hostapis = hostapis or sd.query_hostapis()
-    if idx is None or idx >= len(hostapis):
-        return 99
-    name = hostapis[idx].get("name", "").lower()
-    if "wasapi" in name:
-        return 0
-    if "mme" in name:
-        return 1
-    if "directsound" in name:
-        return 2
-    return 3
-
-
-def apply_device_filters(devices: list[dict], allow: list[str] | None, deny: list[str] | None) -> list[dict]:
-    if allow:
-        allow_set = {a.lower() for a in allow}
-        devices = [d for d in devices if d["name"].lower() in allow_set]
-    if deny:
-        deny_set = {d.lower() for d in deny}
-        devices = [d for d in devices if d["name"].lower() not in deny_set]
-    return devices
-
-
-def list_input_devices(allow: list[str] | None = None, deny: list[str] | None = None) -> list[dict]:
-    hostapis = sd.query_hostapis()
-    devices = sd.query_devices()
-
-    # Deduplicate by normalized name; keep the best hostapi according to priority.
-    best: dict[str, dict] = {}
-    for idx, dev in enumerate(devices):
-        if dev.get("max_input_channels", 0) <= 0:
-            continue
-        name = dev.get("name", "")
-        if NOISY_NAMES.search(name):
-            continue
-        priority = hostapi_priority(dev.get("hostapi"), hostapis)
-        # Ignore lower-priority host APIs (e.g., WDM-KS) to reduce noise unless explicitly allowed
-        if priority >= 3:
-            continue
-        norm = normalize_name(name)
-        cand = {
-            "id": idx,
-            "name": name,
-            "max_input_channels": dev.get("max_input_channels", 0),
-            "hostapi": dev.get("hostapi"),
-            "hostapi_priority": priority,
-        }
-        # If we already have a similar name, keep the higher-priority host API
-        existing_key = None
-        for k in best:
-            if norm in k or k in norm:
-                existing_key = k
-                break
-        if existing_key:
-            existing = best[existing_key]
-            if cand["hostapi_priority"] < existing["hostapi_priority"]:
-                best[existing_key] = cand
-        else:
-            best[norm] = cand
-
-    filtered = list(best.values())
-    filtered.sort(key=lambda d: (d["hostapi_priority"], d["name"].lower()))
-    return apply_device_filters(filtered, allow, deny)
 
 
 def get_device_samplerate(device_id: int | None, fallback: int = 16000) -> int:
@@ -244,204 +150,26 @@ def hotkey_conflicts(combo: str) -> bool:
     return any(b in lc for b in bad)
 
 
-class Recorder:
-    def __init__(self, samplerate: int = 16000, channels: int = 1, device: int | None = None):
-        self.samplerate = samplerate
-        self.channels = channels
-        self.device = device
-        self.stream = None
-        self.wav_file = None
-        self._level = 0.0
-        self._lock = threading.Lock()
-
-    @property
-    def level(self) -> float:
-        with self._lock:
-            return self._level
-
-    def start(self, output_path: Path, extra_settings=None) -> None:
-        if self.stream:
-            return
-        self.wav_file = wave.open(str(output_path), "wb")
-        self.wav_file.setnchannels(self.channels)
-        self.wav_file.setsampwidth(2)  # int16
-        self.wav_file.setframerate(self.samplerate)
-
-        def callback(indata, frames, time_info, status):  # type: ignore[no-untyped-def]
-            if status:
-                # non-fatal warnings; surfaced in UI log when they happen
-                pass
-            self.wav_file.writeframes(indata.tobytes())
-            # compute simple RMS level for UI meter
-            rms = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)))
-            level = min(1.0, rms * 2.5 / 32768.0)  # boost visual meter to reach top more easily
-            with self._lock:
-                self._level = level
-
-        stream_kwargs = dict(
-            device=self.device,
-            samplerate=self.samplerate,
-            channels=self.channels,
-            dtype="int16",
-            callback=callback,
-        )
-        if extra_settings is not None:
-            stream_kwargs["extra_settings"] = extra_settings
-        self.stream = sd.InputStream(**stream_kwargs)
-        self.stream.start()
-
-    def stop(self) -> None:
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
-        if self.wav_file:
-            self.wav_file.close()
-            self.wav_file = None
-        with self._lock:
-            self._level = 0.0
-
-    def is_recording(self) -> bool:
-        return self.stream is not None
 
 
-class MicTester:
-    def __init__(self, samplerate: int = 16000, channels: int = 1, device: int | None = None):
-        self.samplerate = samplerate
-        self.channels = channels
-        self.device = device
-        self.stream = None
-        self._level = 0.0
-        self._lock = threading.Lock()
-        self.level_history: list[float] = []
-        self.above_since: float | None = None
-        self.working = False
-        self.threshold = 0.12  # approximate normal speech RMS fraction
-        self.min_duration = 1.0  # seconds
-
-    @property
-    def level(self) -> float:
-        with self._lock:
-            return self._level
-
-    def start(self, device: int | None, samplerate: int | None = None, channels: int | None = None) -> None:
-        if self.stream:
-            return
-        self.device = device
-        if samplerate:
-            self.samplerate = samplerate
-        if channels:
-            self.channels = channels
-        self.level_history = []
-        self.above_since = None
-        self.working = False
-
-        def callback(indata, frames, time_info, status):  # type: ignore[no-untyped-def]
-            if status:
-                pass
-            rms = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)))
-            level = min(1.0, rms / 32768.0)
-            level = min(1.0, level * 2.5)  # visual boost to make peaks more visible
-            now = time.monotonic()
-            with self._lock:
-                self._level = level
-                self.level_history.append(level)
-                self.level_history = self.level_history[-WATERFALL_WINDOW:]
-                if level > self.threshold:
-                    if self.above_since is None:
-                        self.above_since = now
-                    elif now - self.above_since >= self.min_duration:
-                        self.working = True
-                else:
-                    self.above_since = None
-
-        self.stream = sd.InputStream(
-            device=self.device,
-            samplerate=self.samplerate,
-            channels=self.channels,
-            dtype="int16",
-            callback=callback,
-        )
-        self.stream.start()
-
-    def stop(self) -> None:
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
-        with self._lock:
-            self._level = 0.0
-
-    def is_testing(self) -> bool:
-        return self.stream is not None
 
 
-def transcribe_with_whisper_cpp(audio_file: Path, config) -> str:
-    provider = WhisperCppProvider(
-        binary=Path(config.stt_binary or "main").expanduser(),
-        model=Path(config.stt_model or "").expanduser(),
-        language=config.stt_language,
-    )
-    return provider.transcribe_file(audio_file)
-
-
-class TranscriptListener:
-    """Background websocket listener to stream transcripts into the GUI."""
-
-    def __init__(self, url: str, on_message, on_log) -> None:
-        self.url = url
-        self.on_message = on_message
-        self.on_log = on_log
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread or not self.url:
-            return
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2)
-            self._thread = None
-
-    def _run(self) -> None:
-        try:
-            import websockets  # type: ignore
-        except Exception as exc:  # noqa: BLE001
-            self.on_log(f"[warn] Realtime disabled: websockets import failed ({exc})")
-            return
-        asyncio.run(self._listen(websockets))
-
-    async def _listen(self, websockets) -> None:  # type: ignore[override]
-        backoff = 1
-        while not self._stop.is_set():
-            try:
-                async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
-                    self.on_log(f"[info] Connected to realtime server: {self.url}")
-                    backoff = 1
-                    while not self._stop.is_set():
-                        try:
-                            msg = await asyncio.wait_for(ws.recv(), timeout=1)
-                        except asyncio.TimeoutError:
-                            continue
-                        self.on_message(msg)
-            except Exception as exc:  # noqa: BLE001
-                if self._stop.is_set():
-                    break
-                self.on_log(f"[warn] Realtime reconnecting in {backoff}s: {exc}")
-                await asyncio.sleep(backoff)
-                backoff = min(10, backoff * 2)
-class VoiceGUI:
+class VoiceApp:
     def __init__(self) -> None:
+        self.bootstrap_logs: list[str] = []
+
+        def _bootstrap_log(message: str) -> None:
+            print(message)
+            self.bootstrap_logs.append(message)
+
         self.config = ConfigLoader.load(DEFAULT_CONFIG_PATH)
+        ensure_whisper_assets(self.config, DEFAULT_CONFIG_PATH, log=_bootstrap_log)
         self.repo_cfg = ConfigLoader.select_repo(self.config, self.config.default_repo)
         self.root = Tk()
-        self.root.title("Voice Issue Recorder")
-        self.root.geometry("1340x800")
-        self.root.minsize(1120, 760)
+        self.root.title(styles.WINDOW["title"])
+        self.root.geometry(styles.WINDOW["geometry"])
+        self.root.minsize(styles.WINDOW["min_width"], styles.WINDOW["min_height"])
+        self.ui = VoiceUIComponents(self)
 
         self.recorder: Recorder | None = None
         self.tmp_wav: Path | None = None
@@ -483,27 +211,12 @@ class VoiceGUI:
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
-        self.repo_hint_var = StringVar(value="")
-        self.repo_hint_label: ttk.Label | None = None
-        self.hotkey_info_label: ttk.Label | None = None
-        self.repo_info_label: ttk.Label | None = None
-        self.issues_info_label: ttk.Label | None = None
         self.device_combo: ttk.Combobox | None = None
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
-        self.dark_mode_var = BooleanVar(value=False)
-        self.dark_mode_icon_var = StringVar(value="🌙")
-        self.dark_mode_text_var = StringVar(value="Dark mode")
-        self.dark_mode_icon_label: ttk.Label | None = None
-        self.style = ttk.Style(self.root)
         self.static_info_label: ttk.Label | None = None
-        self._repo_path_trace_guard = False
-        self.repo_path_var.trace_add("write", self._on_repo_path_value_changed)
-        self.issues_path_var.trace_add("write", lambda *args: self._update_repo_hint())
-        self._on_repo_path_value_changed()
 
         self._build_layout()
-        self._update_theme()
         self._ensure_keyboard_module()
         self.root.after(100, self._poll_level)
         self._register_hotkeys()
@@ -515,288 +228,6 @@ class VoiceGUI:
     def _build_layout(self) -> None:
         build_layout_structure(self)
 
-    def _build_header(self, parent: ttk.Frame) -> None:
-        """Render the app title in a consistent block."""
-        ttk.Label(parent, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-
-    def _build_status_label(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        self.status_var = ttk.Label(parent, text="Ready")
-        self.status_var.pack(anchor="w", **pad)
-
-    def _build_log_block(self, parent: Tk) -> None:
-        log_frame = ttk.Frame(parent)
-        log_frame.pack(fill=BOTH, expand=False, padx=10, pady=(0, 10))
-        ttk.Label(log_frame, text="Log:").pack(anchor="w")
-        self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
-        self.log_widget.pack(fill=BOTH, expand=False, pady=(2, 0))
-        self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
-
-    def _build_move_buttons(self, parent: ttk.Frame) -> None:
-        move_all_row = ttk.Frame(parent)
-        move_all_row.pack(fill=BOTH, expand=False, pady=(0, 4))
-        ttk.Label(move_all_row, text="Move selected to:").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(move_all_row, text="Pending", command=self._mark_any_pending).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(move_all_row, text="Remove duplicates", command=self._remove_duplicate_issues).pack(side=LEFT, padx=(0, 4))
-        ttk.Checkbutton(
-            move_all_row,
-            text="Skip delete confirmation",
-            variable=self.skip_delete_confirm,
-        ).pack(side=LEFT, padx=(4, 0))
-
-    def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
-        column = ttk.Frame(parent, padding=(4, 0, 0, 0))
-        column.pack(side=LEFT, fill=BOTH, expand=True)
-        column.columnconfigure(0, weight=1)
-        column.rowconfigure(1, weight=1)
-        base_label = f"{label.strip(':')}:"
-        header = ttk.Label(column, text=f"{base_label} [0]")
-        header.grid(row=0, column=0, sticky="w")
-        listbox = Listbox(
-            column,
-            height=16,
-            selectmode="extended",
-            exportselection=False,
-        )
-        listbox.grid(row=1, column=0, sticky="nsew", pady=(2, 4))
-        if bucket == "pending":
-            self.issue_listbox = listbox
-            listbox.bind("<<ListboxSelect>>", self._on_pending_select)
-        elif bucket == "done":
-            self.issue_listbox_done = listbox
-            listbox.bind("<<ListboxSelect>>", self._on_done_select)
-        else:
-            self.issue_listbox_wait = listbox
-            listbox.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
-        self.issue_header_labels[bucket] = (header, base_label)
-        listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._start_drag(e, b))
-        listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
-        listbox.bind("<Double-Button-1>", lambda e, b=bucket: self._on_issue_double_click(e, b))
-
-        btn_row = ttk.Frame(column)
-        btn_row.grid(row=2, column=0, sticky="ew", pady=(0, 2))
-        if bucket == "pending":
-            ttk.Button(btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
-            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
-            move_row = ttk.Frame(column)
-            move_row.grid(row=3, column=0, sticky="ew", pady=(0, 2))
-            ttk.Button(move_row, text="Move up", command=lambda: self._move_pending_selection(-1)).pack(side=LEFT, padx=(0, 4))
-            ttk.Button(move_row, text="Move down", command=lambda: self._move_pending_selection(1)).pack(side=LEFT)
-        elif bucket == "done":
-            ttk.Button(btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
-            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
-        else:
-            ttk.Button(btn_row, text="Select all", command=lambda: self._select_all_list(self.issue_listbox_wait)).pack(
-                side=LEFT, padx=(0, 4)
-            )
-            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
-
-    def _build_settings_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        self.test_cta_btn = ttk.Button(parent, text="Test Selected Mic", command=self.toggle_mic_test)
-        self.test_cta_btn.pack(fill=BOTH, padx=10, pady=(4, 4))
-
-        columns = ttk.Frame(parent)
-        columns.pack(fill=BOTH, expand=True, **pad)
-        columns.columnconfigure(0, weight=3)
-        columns.columnconfigure(1, weight=2)
-
-        left_col = ttk.Frame(columns)
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        right_col = ttk.Frame(columns)
-        right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
-        right_col.columnconfigure(0, weight=1)
-
-        hk_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
-        hk_row.pack(fill=BOTH, **pad)
-        ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
-        ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
-
-        path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
-        path_row.pack(fill=BOTH, **pad)
-        ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
-        repo_values = list(self.repo_history)
-        current_repo = str(self.repo_cfg.repo_path)
-        if repo_values and repo_values[0] == current_repo:
-            combo_values = repo_values
-        else:
-            combo_values = [current_repo] + [v for v in repo_values if v != current_repo]
-        self.repo_combo = ttk.Combobox(
-            path_row,
-            textvariable=self.repo_path_var,
-            values=combo_values,
-            state="normal",
-            width=70,
-        )
-        self.repo_combo.pack(side=LEFT, padx=(0, 10))
-        ttk.Button(path_row, text="Browse...", width=8, command=self._browse_repo_path).pack(side=LEFT, padx=(0, 6))
-        self._update_repo_combo_values(current_repo=self.repo_cfg.repo_path)
-
-        issue_path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
-        issue_path_row.pack(fill=BOTH, **pad)
-        ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
-        ttk.Label(issue_path_row, text="🗣️", font=("Segoe UI Emoji", 12)).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(
-            issue_path_row,
-            text="Create voice file",
-            width=16,
-            command=self._create_voice_file_for_selected_repo,
-        ).pack(side=LEFT, padx=(0, 6))
-
-        hint_row = ttk.Frame(left_col, padding=(6, 0, 6, 2))
-        hint_row.pack(fill="x", **pad)
-        self.repo_hint_label = ttk.Label(
-            hint_row,
-            textvariable=self.repo_hint_var,
-            wraplength=460,
-            justify=LEFT,
-        )
-        self.repo_hint_label.pack(anchor="w")
-
-        apply_btn = ttk.Button(left_col, text="Apply settings", command=self._apply_settings, width=18)
-        apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
-
-        self.hotkey_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
-        self.hotkey_info_label.pack(fill="x", padx=(6, 4), pady=(2, 1))
-        self.repo_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
-        self.repo_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
-        self.issues_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
-        self.issues_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
-        device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
-        device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
-        device_row.columnconfigure(0, weight=0)
-        device_row.columnconfigure(1, weight=4)
-        device_row.columnconfigure(2, weight=1)
-        ttk.Label(device_row, text="Input device:").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        values = [f"{d['id']}: {d['name']}" for d in self.device_list]
-        self.device_combo = ttk.Combobox(
-            device_row,
-            values=values,
-            state="readonly",
-            width=32,
-        )
-        self.device_combo.grid(row=0, column=1, sticky="ew", padx=(0, 6))
-        if self.device_list:
-            self.device_combo.current(0)
-            self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).grid(row=0, column=2, sticky="e", padx=(0, 6))
-        self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
-        self.live_indicator.grid(row=0, column=3, sticky="e", padx=(0, 0))
-        self._refresh_static_info()
-        self._update_theme()
-
-    def _current_palette(self) -> dict[str, str]:
-        return DARK_THEME if self.dark_mode_var.get() else LIGHT_THEME
-
-    def _update_theme(self) -> None:
-        palette = self._current_palette()
-        try:
-            self.style.theme_use("clam")
-        except Exception:
-            pass
-        self.style.configure("TFrame", background=palette["panel_bg"])
-        self.style.configure("TLabel", background=palette["panel_bg"], foreground=palette["fg"])
-        self.style.configure("TButton", background=palette["element_bg"], foreground=palette["fg"])
-        self.style.configure("TCheckbutton", background=palette["panel_bg"], foreground=palette["fg"])
-        self.style.configure("TEntry", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
-        self.style.configure("TCombobox", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
-        self.root.configure(background=palette["root_bg"])
-        for lb in (self.issue_listbox, self.issue_listbox_done, self.issue_listbox_wait):
-            if lb:
-                lb.configure(
-                    background=palette["list_bg"],
-                    foreground=palette["fg"],
-                    selectbackground=palette["select_bg"],
-                    selectforeground=palette["select_fg"],
-                    highlightbackground=palette["border"],
-                    activestyle="none",
-                )
-        if self.log_widget:
-            self.log_widget.configure(
-                background=palette["list_bg"],
-                foreground=palette["fg"],
-                insertbackground=palette["fg"],
-            )
-        if self.live_indicator:
-            self.live_indicator.config(background=palette["accent"], foreground="white")
-        if self.test_canvas:
-            self.test_canvas.configure(background=palette["canvas_bg"])
-        if self.repo_hint_label:
-            self.repo_hint_label.config(foreground=palette["accent"])
-        if self.dark_mode_icon_label:
-            self.dark_mode_icon_label.config(background=palette["panel_bg"], foreground=palette["accent"])
-        self._refresh_dark_mode_label()
-        self._draw_test_history(self.waterfall_history)
-
-    def _waterfall_color(self, level: float, palette: dict[str, str]) -> str:
-        val = max(0.0, min(level, 1.0))
-        if val < 0.25:
-            return "#1c4571"
-        if val < 0.5:
-            return "#1d88bc"
-        if val < 0.75:
-            return "#47c7ff"
-        return palette["accent"]
-
-    def _refresh_dark_mode_label(self) -> None:
-        icon = "🌙" if not self.dark_mode_var.get() else "☀️"
-        text = "Dark mode" if not self.dark_mode_var.get() else "Day mode"
-        self.dark_mode_icon_var.set(icon)
-        self.dark_mode_text_var.set(text)
-
-    def _build_live_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        parent.columnconfigure(0, weight=1)
-        live_output_frame = ttk.Frame(parent, padding=(6, 4, 6, 4))
-        live_output_frame.grid(row=0, column=0, sticky="nsew")
-        live_output_frame.columnconfigure(0, weight=1)
-        ttk.Label(live_output_frame, text="Live speech output:").pack(anchor="w")
-        self.live_transcript_widget = scrolledtext.ScrolledText(live_output_frame, height=5, state=DISABLED)
-        self.live_transcript_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
-
-    def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        wf_header = ttk.Frame(parent)
-        wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
-        ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
-        self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
-        self.waterfall_status.pack(side=LEFT, padx=(8, 0))
-        self.test_canvas = Canvas(parent, height=280, bg="#1e1e1e", highlightthickness=0)
-        self.test_canvas.pack(fill=BOTH, expand=True, padx=10, pady=(0, 5))
-
-    def _build_action_buttons(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        btn_row = ttk.Frame(parent)
-        btn_row.pack(fill=BOTH, **pad)
-        self.start_btn = ttk.Button(btn_row, text="Start Recording", command=self.start_recording)
-        self.start_btn.pack(side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
-        self.stop_btn = ttk.Button(btn_row, text="Stop & Transcribe", command=self.stop_recording, state=DISABLED)
-        self.stop_btn.pack(side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
-
-    def _build_issues_panel(self, parent: ttk.Frame) -> None:
-        panel = ttk.Frame(parent, padding=(8, 0, 0, 0))
-        panel.pack(fill=BOTH, expand=True)
-        self._build_move_buttons(panel)
-        dark_row = ttk.Frame(panel)
-        dark_row.pack(fill="x", pady=(0, 4))
-        spacer = ttk.Frame(dark_row)
-        spacer.pack(side=LEFT, fill=BOTH, expand=True)
-        self.dark_mode_icon_label = ttk.Label(dark_row, textvariable=self.dark_mode_icon_var, font=("Segoe UI Emoji", 12))
-        self.dark_mode_icon_label.pack(side=RIGHT, padx=(0, 4))
-        ttk.Checkbutton(
-            dark_row,
-            textvariable=self.dark_mode_text_var,
-            variable=self.dark_mode_var,
-            command=self._update_theme,
-        ).pack(side=RIGHT)
-
-        lists_row = ttk.Frame(panel)
-        lists_row.pack(fill=BOTH, expand=True)
-
-        self._build_issue_column(lists_row, "Pending issues:", "pending")
-        self._build_issue_column(lists_row, "Completed issues:", "done")
-        self._build_issue_column(lists_row, "Waitlist issues:", "wait")
-
 
     def _log(self, msg: str) -> None:
         if not self.log_widget:
@@ -805,6 +236,13 @@ class VoiceGUI:
         self.log_widget.insert(END, msg + "\n")
         self.log_widget.see(END)
         self.log_widget.config(state=DISABLED)
+
+    def _flush_bootstrap_logs(self) -> None:
+        if not getattr(self, "bootstrap_logs", None):
+            return
+        for entry in self.bootstrap_logs:
+            self._log(entry)
+        self.bootstrap_logs.clear()
 
     def _handle_transcript_message(self, text: str) -> None:
         # Live transcript pane is reserved for future playback; ignore incoming text.
@@ -1447,17 +885,8 @@ class VoiceGUI:
         self.issues_path_var.set(str(issues_path))
         self._ensure_repo_voice_assets(repo_path, issues_path)
         self._record_repo_history(repo_path)
-        try:
-            rel_issue_entry = str(issues_path.resolve().relative_to(repo_path))
-        except Exception:
-            rel_issue_entry = str(issues_path.resolve())
-        if self.config:
-            self.config.default_repo = str(repo_path)
-            self.config.repos[str(repo_path)] = {"issuesFile": rel_issue_entry}
-        self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=issues_path)
         self.repo_path_var.set(str(repo_path))
         self.issues_path_var.set(str(issues_path))
-        self._refresh_issue_list()
         self._refresh_static_info()
         self._log(f"[ok] Created voice issues file at {issues_path}")
 
@@ -1476,58 +905,6 @@ class VoiceGUI:
             self.repo_info_label.config(text=repo_text)
         if self.issues_info_label:
             self.issues_info_label.config(text=issues_text)
-        self._update_repo_hint()
-
-    def _on_repo_path_value_changed(self, *args) -> None:
-        if self._repo_path_trace_guard:
-            return
-        self._repo_path_trace_guard = True
-        try:
-            repo_text = self.repo_path_var.get().strip()
-            if not repo_text:
-                self.repo_hint_var.set("Select a repository path to see voice-file hints.")
-                return
-            repo_path = Path(repo_text).expanduser()
-            try:
-                repo_path = repo_path.resolve()
-            except Exception:
-                pass
-            candidate = repo_path / ".voice" / "voice-issues.md"
-            try:
-                resolved = candidate.resolve()
-            except Exception:
-                resolved = candidate
-            new_path = str(resolved)
-            if self.issues_path_var.get() != new_path:
-                self.issues_path_var.set(new_path)
-            self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=Path(new_path))
-            self._refresh_static_info()
-            self._refresh_issue_list()
-        finally:
-            self._repo_path_trace_guard = False
-
-    def _update_repo_hint(self) -> None:
-        if not self.repo_hint_label:
-            return
-        repo_text = self.repo_path_var.get().strip()
-        issues_text = self.issues_path_var.get().strip()
-        if not repo_text:
-            self.repo_hint_var.set("Select a repository path to see voice-file hints.")
-            return
-        try:
-            repo_path = Path(repo_text).expanduser().resolve()
-        except Exception:
-            self.repo_hint_var.set("The selected repository path is invalid.")
-            return
-        issues_path = Path(issues_text or "voice-issues.md").expanduser()
-        if not issues_path.is_absolute():
-            issues_path = (repo_path / issues_path).resolve()
-        if issues_path.exists():
-            self.repo_hint_var.set(f"Existing voice issues log detected at {issues_path}; using that file.")
-        else:
-            self.repo_hint_var.set(
-                f"No voice issues log found at {issues_path}; click Create voice file to bootstrap `.voice/voice-issues.md`."
-            )
 
     def _browse_repo_path(self) -> None:
         try:
@@ -1619,10 +996,6 @@ class VoiceGUI:
                 target = voice_dir / AGENT_VOICE_SOURCE.name
                 if not target.exists():
                     shutil.copy(AGENT_VOICE_SOURCE, target)
-            if VOICE_WORKFLOW_SOURCE.exists():
-                workflow_target = voice_dir / VOICE_WORKFLOW_SOURCE.name
-                if not workflow_target.exists():
-                    shutil.copy(VOICE_WORKFLOW_SOURCE, workflow_target)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to copy voice guidance into {repo_path}: {exc}")
 
@@ -1697,35 +1070,6 @@ class VoiceGUI:
         entries = self._read_issue_entries()
         self._write_issue_entries(entries)
         return self._format_issue_lines(entries)
-
-    def _remove_duplicate_issues(self) -> None:
-        try:
-            entries = self._read_issue_entries()
-            unique_entries: list[tuple[str, str]] = []
-            seen: set[str] = set()
-            duplicates = 0
-            for state, text in entries:
-                normalized = text.strip().lower()
-                if not normalized:
-                    continue
-                if normalized in seen:
-                    duplicates += 1
-                    continue
-                seen.add(normalized)
-                unique_entries.append((state, text))
-            if duplicates == 0:
-                self._log("[info] No duplicate issues found.")
-                return
-            confirm = messagebox.askyesno(
-                "Remove duplicates", f"Found {duplicates} duplicate issue(s). Remove them from the current repo?"
-            )
-            if not confirm:
-                return
-            self._write_issue_entries(unique_entries)
-            self._refresh_issue_list()
-            self._log(f"[ok] Removed {duplicates} duplicate issue(s) from {self.repo_cfg.issues_file}")
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"[error] Failed to deduplicate issues: {exc}")
 
     def refresh_devices(self) -> None:
         self.device_list = list_input_devices(self.config.device_allowlist, self.config.device_denylist)
@@ -2043,32 +1387,22 @@ class VoiceGUI:
         canvas = self.test_canvas
         if not canvas:
             return
-        palette = self._current_palette()
         canvas.delete("all")
         if not history:
             return
         width = int(canvas.winfo_width() or canvas["width"])
         height = int(canvas.winfo_height() or 80)
-        bar_width = max(2, width // max(1, len(history)))
-        max_bars = max(1, width // bar_width)
-        canvas.create_rectangle(0, 0, width, height, fill=palette["canvas_bg"], outline="")
-        for i, level in enumerate(history[-max_bars:]):
+        n = len(history)
+        bar_width = max(2, width // max(1, n))
+        for i, level in enumerate(history[-(width // bar_width) :]):
             x0 = i * bar_width
             x1 = x0 + bar_width - 1
-            bar_height = int(max(0.0, min(level, 1.0)) * height)
+            bar_height = int(level * height)
             y0 = height - bar_height
             y1 = height
-            color = self._waterfall_color(level, palette)
-            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline=color)
-            canvas.create_line(x0, y0, x1 + 1, y0, fill=palette["border"], width=1)
-        for idx in range(1, 4):
-            y = height - idx * (height / 4)
-            canvas.create_line(0, y, width, y, fill=palette["border"], width=1)
-        if threshold is not None:
-            th_val = max(0.0, min(threshold, 1.0))
-            th_y = height - int(th_val * height)
-            canvas.create_line(0, th_y, width, th_y, fill=palette["accent"], dash=(4, 4), width=2)
-        canvas.create_line(0, height - 1, width, height - 1, fill=palette["accent"], width=2)
+            th = threshold if threshold is not None else 0.1
+            color = "#4caf50" if level > th else "#888888"
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
 
     def run(self) -> None:
         self.root.mainloop()
@@ -2209,7 +1543,7 @@ class VoiceGUI:
 
 def main() -> int:
     try:
-        app = VoiceGUI()
+        app = VoiceApp()
         app.run()
         return 0
     except Exception as exc:  # noqa: BLE001
