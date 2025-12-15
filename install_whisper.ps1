@@ -73,29 +73,14 @@ if (-not $NoConfigUpdate) {
     $configPath = Join-Path $repoRoot ".voice_config.json"
     Write-Host "[info] Updating $configPath"
 
-    $config = @{}
+    $config = [pscustomobject]@{}
     if (Test-Path $configPath) {
         $json = Get-Content -Path $configPath -Raw -Encoding UTF8
         $config = $json | ConvertFrom-Json
     }
 
     # Ensure repos is a dictionary so paths with ':' can be used as keys.
-    if (-not $config.repos) { $config | Add-Member -NotePropertyName repos -NotePropertyValue @{} }
-    if ($config.repos -isnot [System.Collections.IDictionary]) { $config.repos = @{} }
-    if (-not $config.hotkeys) {
-        $config | Add-Member -NotePropertyName hotkeys -NotePropertyValue @{ toggle = "ctrl+alt+i"; quit = "ctrl+alt+q" }
-    }
-    $alias = "local"
-    if (-not $config.repos.Contains($alias)) {
-        $config.repos[$alias] = @{
-            path = "."
-            issuesFile = ".voice/voice-issues.md"
-        }
-    }
-    $config.defaultRepo = $alias
-    if (-not $config.phrases) {
-        $config | Add-Member -NotePropertyName phrases -NotePropertyValue @{ nextIssue = @("next issue","next point"); stop = @("end issues","stop issues") }
-    }
+    # Installer leaves repo aliases to the GUI/daemon so alias metadata stays repo-local.
     if (-not $config.stt) {
         $config | Add-Member -NotePropertyName stt -NotePropertyValue @{}
     }
@@ -112,8 +97,10 @@ if (-not $NoConfigUpdate) {
     $relativeModel = ".tools/whisper/$ModelName"
     $config.stt.model = $relativeModel
     if (-not $config.stt.language) { $config.stt.language = "en" }
-    if (-not $config.realtime) {
+    if (-not ($config | Get-Member -Name realtime -ErrorAction SilentlyContinue)) {
         $config | Add-Member -NotePropertyName realtime -NotePropertyValue @{ wsUrl = $null; postUrl = $null }
+    } elseif (-not $config.realtime) {
+        $config.realtime = @{ wsUrl = $null; postUrl = $null }
     }
 
     $config | ConvertTo-Json -Depth 6 | Set-Content -Path $configPath -Encoding UTF8
