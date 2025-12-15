@@ -112,8 +112,10 @@ if (-not $NoConfigUpdate) {
     $relativeModel = ".tools/whisper/$ModelName"
     $config.stt.model = $relativeModel
     if (-not $config.stt.language) { $config.stt.language = "en" }
-    if (-not $config.realtime) {
+    if (-not ($config | Get-Member -Name realtime -ErrorAction SilentlyContinue)) {
         $config | Add-Member -NotePropertyName realtime -NotePropertyValue @{ wsUrl = $null; postUrl = $null }
+    } elseif (-not $config.realtime) {
+        $config.realtime = @{ wsUrl = $null; postUrl = $null }
     }
 
     $config | ConvertTo-Json -Depth 6 | Set-Content -Path $configPath -Encoding UTF8
