@@ -73,7 +73,7 @@ if (-not $NoConfigUpdate) {
     $configPath = Join-Path $repoRoot ".voice_config.json"
     Write-Host "[info] Updating $configPath"
 
-    $config = @{}
+    $config = [pscustomobject]@{}
     if (Test-Path $configPath) {
         $json = Get-Content -Path $configPath -Raw -Encoding UTF8
         $config = $json | ConvertFrom-Json
