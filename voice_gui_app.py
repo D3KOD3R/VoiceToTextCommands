@@ -50,6 +50,8 @@ AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
 VOICE_WORKFLOW_SOURCE = ROOT / "VOICE_ISSUE_WORKFLOW.md"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
+LOG_PATH = ROOT / ".tmp" / "voice_gui.log"
+LOG_LOCK = threading.Lock()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -805,6 +807,19 @@ class VoiceGUI:
         self.log_widget.insert(END, msg + "\n")
         self.log_widget.see(END)
         self.log_widget.config(state=DISABLED)
+        self._write_runtime_log(msg)
+
+    def _write_runtime_log(self, msg: str) -> None:
+        """Mirror runtime log entries to a disk file for easy post-run inspection."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        line = f"{timestamp} {msg}\n"
+        try:
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with LOG_LOCK:
+                with LOG_PATH.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+        except OSError:
+            pass
 
     def _handle_transcript_message(self, text: str) -> None:
         # Live transcript pane is reserved for future playback; ignore incoming text.
