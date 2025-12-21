@@ -29,9 +29,10 @@ import urllib.error
 import urllib.request
 import wave
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
-from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk, filedialog
+from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Label, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk, filedialog
 from tkinter import scrolledtext
 
 import numpy as np
@@ -67,6 +68,8 @@ from voice_gui_layout import build_layout_structure
 NOISY_NAMES = re.compile(r"(hands[- ]?free|hf audio|bthhfenum|telephony|communications|loopback|primary sound capture)", re.I)
 WATERFALL_WINDOW = 50  # number of samples to display (~5s at 10 Hz poll)
 WAIT_STATE_CHAR = "~"
+DONE_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M"
+DONE_TIMESTAMP_PATTERN = re.compile(r"\s*\(completed (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\)\s*$")
 
 LIGHT_THEME = {
     "root_bg": "#f3f5fb",
@@ -483,8 +486,6 @@ class VoiceGUI:
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
-        self.repo_hint_var = StringVar(value="")
-        self.repo_hint_label: ttk.Label | None = None
         self.hotkey_info_label: ttk.Label | None = None
         self.repo_info_label: ttk.Label | None = None
         self.issues_info_label: ttk.Label | None = None
@@ -499,7 +500,6 @@ class VoiceGUI:
         self.static_info_label: ttk.Label | None = None
         self._repo_path_trace_guard = False
         self.repo_path_var.trace_add("write", self._on_repo_path_value_changed)
-        self.issues_path_var.trace_add("write", lambda *args: self._update_repo_hint())
         self._on_repo_path_value_changed()
 
         self._build_layout()
@@ -516,8 +516,19 @@ class VoiceGUI:
         build_layout_structure(self)
 
     def _build_header(self, parent: ttk.Frame) -> None:
-        """Render the app title in a consistent block."""
-        ttk.Label(parent, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        """Render the app title and global controls at the top."""
+        title = ttk.Label(parent, text="Voice Issue Recorder", font=("Segoe UI", 12, "bold"))
+        title.pack(side=LEFT, anchor="w")
+        toggle_row = ttk.Frame(parent)
+        toggle_row.pack(side=RIGHT)
+        self.dark_mode_icon_label = ttk.Label(toggle_row, textvariable=self.dark_mode_icon_var, font=("Segoe UI Emoji", 12))
+        self.dark_mode_icon_label.pack(side=LEFT, padx=(0, 4))
+        ttk.Checkbutton(
+            toggle_row,
+            textvariable=self.dark_mode_text_var,
+            variable=self.dark_mode_var,
+            command=self._update_theme,
+        ).pack(side=LEFT)
 
     def _build_status_label(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         self.status_var = ttk.Label(parent, text="Ready")
@@ -539,6 +550,7 @@ class VoiceGUI:
         ttk.Button(move_all_row, text="Completed", command=self._mark_any_completed).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Waitlist", command=self._mark_any_waitlist).pack(side=LEFT, padx=(0, 4))
         ttk.Button(move_all_row, text="Remove duplicates", command=self._remove_duplicate_issues).pack(side=LEFT, padx=(0, 4))
+        ttk.Button(move_all_row, text="Delete selected", command=self._delete_selected_current_bucket).pack(side=LEFT, padx=(0, 4))
         ttk.Checkbutton(
             move_all_row,
             text="Skip delete confirmation",
@@ -560,6 +572,7 @@ class VoiceGUI:
             exportselection=False,
         )
         listbox.grid(row=1, column=0, sticky="nsew", pady=(2, 4))
+        self._setup_listbox_accessibility(listbox, bucket)
         if bucket == "pending":
             self.issue_listbox = listbox
             listbox.bind("<<ListboxSelect>>", self._on_pending_select)
@@ -570,7 +583,7 @@ class VoiceGUI:
             self.issue_listbox_wait = listbox
             listbox.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
         self.issue_header_labels[bucket] = (header, base_label)
-        listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._start_drag(e, b))
+        listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._handle_listbox_primary_click(e, b))
         listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
         listbox.bind("<Double-Button-1>", lambda e, b=bucket: self._on_issue_double_click(e, b))
 
@@ -578,34 +591,22 @@ class VoiceGUI:
         btn_row.grid(row=2, column=0, sticky="ew", pady=(0, 2))
         if bucket == "pending":
             ttk.Button(btn_row, text="Select all", command=self._select_all_pending).pack(side=LEFT, padx=(0, 4))
-            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_pending).pack(side=LEFT)
-            move_row = ttk.Frame(column)
-            move_row.grid(row=3, column=0, sticky="ew", pady=(0, 2))
-            ttk.Button(move_row, text="Move up", command=lambda: self._move_pending_selection(-1)).pack(side=LEFT, padx=(0, 4))
-            ttk.Button(move_row, text="Move down", command=lambda: self._move_pending_selection(1)).pack(side=LEFT)
+            ttk.Button(btn_row, text="Move up", command=lambda: self._move_pending_selection(-1)).pack(side=LEFT, padx=(0, 4))
+            ttk.Button(btn_row, text="Move down", command=lambda: self._move_pending_selection(1)).pack(side=LEFT)
         elif bucket == "done":
             ttk.Button(btn_row, text="Select all", command=self._select_all_done).pack(side=LEFT, padx=(0, 4))
-            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_done).pack(side=LEFT)
         else:
             ttk.Button(btn_row, text="Select all", command=lambda: self._select_all_list(self.issue_listbox_wait)).pack(
                 side=LEFT, padx=(0, 4)
             )
-            ttk.Button(btn_row, text="Delete selected", command=self._delete_selected_wait).pack(side=LEFT)
 
     def _build_settings_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        self.test_cta_btn = ttk.Button(parent, text="Test Selected Mic", command=self.toggle_mic_test)
-        self.test_cta_btn.pack(fill=BOTH, padx=10, pady=(4, 4))
-
         columns = ttk.Frame(parent)
         columns.pack(fill=BOTH, expand=True, **pad)
-        columns.columnconfigure(0, weight=3)
-        columns.columnconfigure(1, weight=2)
+        columns.columnconfigure(0, weight=1)
 
         left_col = ttk.Frame(columns)
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        right_col = ttk.Frame(columns)
-        right_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
-        right_col.columnconfigure(0, weight=1)
+        left_col.grid(row=0, column=0, sticky="nsew")
 
         hk_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
@@ -646,30 +647,16 @@ class VoiceGUI:
             command=self._create_voice_file_for_selected_repo,
         ).pack(side=LEFT, padx=(0, 6))
 
-        hint_row = ttk.Frame(left_col, padding=(6, 0, 6, 2))
-        hint_row.pack(fill="x", **pad)
-        self.repo_hint_label = ttk.Label(
-            hint_row,
-            textvariable=self.repo_hint_var,
-            wraplength=460,
-            justify=LEFT,
-        )
-        self.repo_hint_label.pack(anchor="w")
-
         apply_btn = ttk.Button(left_col, text="Apply settings", command=self._apply_settings, width=18)
         apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
 
-        self.hotkey_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
-        self.hotkey_info_label.pack(fill="x", padx=(6, 4), pady=(2, 1))
-        self.repo_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
-        self.repo_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
-        self.issues_info_label = ttk.Label(right_col, text="", justify=LEFT, anchor="w")
-        self.issues_info_label.pack(fill="x", padx=(6, 4), pady=(0, 1))
         device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         device_row.columnconfigure(0, weight=0)
         device_row.columnconfigure(1, weight=4)
-        device_row.columnconfigure(2, weight=1)
+        device_row.columnconfigure(2, weight=0)
+        device_row.columnconfigure(3, weight=0)
+        device_row.columnconfigure(4, weight=0)
         ttk.Label(device_row, text="Input device:").grid(row=0, column=0, sticky="w", padx=(0, 6))
         values = [f"{d['id']}: {d['name']}" for d in self.device_list]
         self.device_combo = ttk.Combobox(
@@ -682,9 +669,11 @@ class VoiceGUI:
         if self.device_list:
             self.device_combo.current(0)
             self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
-        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).grid(row=0, column=2, sticky="e", padx=(0, 6))
+        self.test_cta_btn = ttk.Button(device_row, text="Test Selected Mic", command=self.toggle_mic_test, width=16)
+        self.test_cta_btn.grid(row=0, column=2, sticky="w", padx=(0, 6))
+        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).grid(row=0, column=3, sticky="e", padx=(0, 6))
         self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
-        self.live_indicator.grid(row=0, column=3, sticky="e", padx=(0, 0))
+        self.live_indicator.grid(row=0, column=4, sticky="e", padx=(0, 0))
         self._refresh_static_info()
         self._update_theme()
 
@@ -700,8 +689,19 @@ class VoiceGUI:
         self.style.configure("TFrame", background=palette["panel_bg"])
         self.style.configure("TLabel", background=palette["panel_bg"], foreground=palette["fg"])
         self.style.configure("TButton", background=palette["element_bg"], foreground=palette["fg"])
+        self.style.map(
+            "TButton",
+            background=[("active", palette["accent"]), ("!disabled", palette["element_bg"])],
+            foreground=[("active", palette["select_fg"]), ("!disabled", palette["fg"])],
+        )
         self.style.configure("TCheckbutton", background=palette["panel_bg"], foreground=palette["fg"])
-        self.style.configure("TEntry", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
+        self.style.configure(
+            "TEntry",
+            fieldbackground=palette["entry_bg"],
+            foreground=palette["fg"],
+            insertcolor=palette["fg"],
+            insertbackground=palette["fg"],
+        )
         self.style.configure("TCombobox", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
         self.root.configure(background=palette["root_bg"])
         for lb in (self.issue_listbox, self.issue_listbox_done, self.issue_listbox_wait):
@@ -724,10 +724,13 @@ class VoiceGUI:
             self.live_indicator.config(background=palette["accent"], foreground="white")
         if self.test_canvas:
             self.test_canvas.configure(background=palette["canvas_bg"])
-        if self.repo_hint_label:
-            self.repo_hint_label.config(foreground=palette["accent"])
         if self.dark_mode_icon_label:
             self.dark_mode_icon_label.config(background=palette["panel_bg"], foreground=palette["accent"])
+        info_bg = palette["accent"]
+        info_fg = palette["select_fg"]
+        for label in (self.hotkey_info_label, self.repo_info_label, self.issues_info_label):
+            if label:
+                label.config(background=info_bg, foreground=info_fg)
         self._refresh_dark_mode_label()
         self._draw_test_history(self.waterfall_history)
 
@@ -777,25 +780,22 @@ class VoiceGUI:
         panel = ttk.Frame(parent, padding=(8, 0, 0, 0))
         panel.pack(fill=BOTH, expand=True)
         self._build_move_buttons(panel)
-        dark_row = ttk.Frame(panel)
-        dark_row.pack(fill="x", pady=(0, 4))
-        spacer = ttk.Frame(dark_row)
-        spacer.pack(side=LEFT, fill=BOTH, expand=True)
-        self.dark_mode_icon_label = ttk.Label(dark_row, textvariable=self.dark_mode_icon_var, font=("Segoe UI Emoji", 12))
-        self.dark_mode_icon_label.pack(side=RIGHT, padx=(0, 4))
-        ttk.Checkbutton(
-            dark_row,
-            textvariable=self.dark_mode_text_var,
-            variable=self.dark_mode_var,
-            command=self._update_theme,
-        ).pack(side=RIGHT)
-
         lists_row = ttk.Frame(panel)
         lists_row.pack(fill=BOTH, expand=True)
 
         self._build_issue_column(lists_row, "Pending issues:", "pending")
         self._build_issue_column(lists_row, "Completed issues:", "done")
         self._build_issue_column(lists_row, "Waitlist issues:", "wait")
+
+        info_frame = ttk.Frame(panel, padding=(6, 4, 6, 0))
+        info_frame.pack(fill="x", pady=(6, 0))
+        info_frame.columnconfigure(0, weight=1)
+        self.hotkey_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9, "bold"))
+        self.hotkey_info_label.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        self.repo_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
+        self.repo_info_label.grid(row=1, column=0, sticky="ew", pady=(0, 2))
+        self.issues_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
+        self.issues_info_label.grid(row=2, column=0, sticky="ew")
 
 
     def _log(self, msg: str) -> None:
@@ -854,6 +854,7 @@ class VoiceGUI:
             self.issue_entries_pending = pending
             self.issue_entries_done = done
             self.issue_entries_wait = wait
+            done.sort(key=lambda entry: self._parse_done_timestamp(entry[1]) or datetime.min, reverse=True)
             if self.issue_listbox:
                 self.issue_listbox.delete(0, END)
                 self.pending_row_map = []
@@ -1080,6 +1081,66 @@ class VoiceGUI:
             return self.issue_listbox_wait
         return None
 
+    def _delete_selected_current_bucket(self) -> None:
+        focused = self.root.focus_get()
+        bucket = self._bucket_for_widget(focused)
+        if not bucket:
+            for name, lb in (("pending", self.issue_listbox), ("done", self.issue_listbox_done), ("wait", self.issue_listbox_wait)):
+                if lb and lb.curselection():
+                    bucket = name
+                    break
+        if not bucket:
+            return
+        if bucket == "pending":
+            self._delete_selected_pending()
+        elif bucket == "done":
+            self._delete_selected_done()
+        elif bucket == "wait":
+            self._delete_selected_wait()
+
+    def _handle_listbox_delete(self, event, bucket: str) -> str:
+        if bucket == "pending":
+            self._delete_selected_pending()
+        elif bucket == "done":
+            self._delete_selected_done()
+        elif bucket == "wait":
+            self._delete_selected_wait()
+        return "break"
+
+    def _clear_selection(self, listbox: Listbox | None) -> str:
+        if listbox:
+            listbox.selection_clear(0, END)
+        return "break"
+
+    def _handle_listbox_primary_click(self, event, bucket: str) -> None:
+        listbox = event.widget
+        if not isinstance(listbox, Listbox):
+            return
+
+        row = listbox.nearest(event.y)
+        if row < 0:
+            return
+
+        modifiers = event.state & (1 | 4 | 8)
+        selection = listbox.curselection()
+        if modifiers == 0 and row in selection:
+            listbox.selection_clear(0, END)
+            return "break"
+
+        self._start_drag(event, bucket)
+
+    def _setup_listbox_accessibility(self, listbox: Listbox, bucket: str) -> None:
+        palette = self._current_palette()
+        listbox.configure(
+            takefocus=True,
+            highlightthickness=2,
+            highlightbackground=palette["border"],
+            highlightcolor=palette["accent"],
+            selectbackground=palette["accent"],
+            selectforeground=palette["select_fg"],
+        )
+        listbox.bind("<Delete>", lambda e, b=bucket: self._handle_listbox_delete(e, b))
+        listbox.bind("<Escape>", lambda e, lb=listbox: self._clear_selection(lb))
     def _expand_issue_selection(self, listbox: Listbox | None, row_map: list[int]) -> None:
         """
         When a line belonging to a wrapped issue is selected, ensure every line for that issue is selected.
@@ -1367,8 +1428,38 @@ class VoiceGUI:
 
     @staticmethod
     def _set_issue_state(line: str, state_char: str) -> str:
-        return re.sub(r"^(\s*[-*]\s*\[)[^\]](\])", rf"\1{state_char}\2", line)
+        trailing_newline = "\n" if line.endswith("\n") else ""
+        normalized = re.sub(r"^(\s*[-*]\s*\[)[^\]](\])", rf"\1{state_char}\2", line.rstrip("\n"))
+        normalized = normalized.rstrip()
+        if state_char.lower() == "x":
+            normalized = VoiceGUI._append_done_timestamp(normalized)
+        else:
+            normalized = VoiceGUI._remove_done_timestamp(normalized)
+        return normalized + trailing_newline
 
+    @staticmethod
+    def _current_done_timestamp() -> str:
+        return datetime.now().strftime(DONE_TIMESTAMP_FORMAT)
+
+    @staticmethod
+    def _append_done_timestamp(text: str) -> str:
+        clean = VoiceGUI._remove_done_timestamp(text)
+        timestamp = VoiceGUI._current_done_timestamp()
+        return f"{clean} (completed {timestamp})"
+
+    @staticmethod
+    def _remove_done_timestamp(text: str) -> str:
+        return DONE_TIMESTAMP_PATTERN.sub("", text).rstrip()
+
+    @staticmethod
+    def _parse_done_timestamp(text: str) -> datetime | None:
+        match = DONE_TIMESTAMP_PATTERN.search(text)
+        if match:
+            try:
+                return datetime.strptime(match.group(1), DONE_TIMESTAMP_FORMAT)
+            except ValueError:
+                pass
+        return None
     def _apply_settings(self) -> None:
         toggle = self.hotkey_toggle_var.get().strip()
         quit_key = self.hotkey_quit_var.get().strip()
@@ -1472,7 +1563,6 @@ class VoiceGUI:
             self.repo_info_label.config(text=repo_text)
         if self.issues_info_label:
             self.issues_info_label.config(text=issues_text)
-        self._update_repo_hint()
 
     def _on_repo_path_value_changed(self, *args) -> None:
         if self._repo_path_trace_guard:
@@ -1481,7 +1571,6 @@ class VoiceGUI:
         try:
             repo_text = self.repo_path_var.get().strip()
             if not repo_text:
-                self.repo_hint_var.set("Select a repository path to see voice-file hints.")
                 return
             repo_path = Path(repo_text).expanduser()
             try:
@@ -1501,29 +1590,6 @@ class VoiceGUI:
             self._refresh_issue_list()
         finally:
             self._repo_path_trace_guard = False
-
-    def _update_repo_hint(self) -> None:
-        if not self.repo_hint_label:
-            return
-        repo_text = self.repo_path_var.get().strip()
-        issues_text = self.issues_path_var.get().strip()
-        if not repo_text:
-            self.repo_hint_var.set("Select a repository path to see voice-file hints.")
-            return
-        try:
-            repo_path = Path(repo_text).expanduser().resolve()
-        except Exception:
-            self.repo_hint_var.set("The selected repository path is invalid.")
-            return
-        issues_path = Path(issues_text or "voice-issues.md").expanduser()
-        if not issues_path.is_absolute():
-            issues_path = (repo_path / issues_path).resolve()
-        if issues_path.exists():
-            self.repo_hint_var.set(f"Existing voice issues log detected at {issues_path}; using that file.")
-        else:
-            self.repo_hint_var.set(
-                f"No voice issues log found at {issues_path}; click Create voice file to bootstrap `.voice/voice-issues.md`."
-            )
 
     def _browse_repo_path(self) -> None:
         try:

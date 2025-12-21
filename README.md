@@ -9,8 +9,9 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - GUI recorder with mic selection and live level (whisper.cpp backend).
 - GUI mic test with waterfall meter to confirm the mic is working.
 - Manage issue states in the GUI (mark pending as done, undo completed items, delete, waitlist bucket with drag/drop, skip delete confirms, and wrap long text).
-- Settings panel now lists the configured hotkeys, repo path, and issues file in a static column, offers a one-click **Create voice file** helper, and keeps the inputs grouped in left/right columns that match the mockup.
+- Settings panel now lists the configured hotkeys, repo path, and issues file in a static column, offers a one-click **Create voice file** helper, keeps the inputs grouped in left/right columns that match the mockup, and sits the Test Selected Mic button beside the device picker so checks happen where you choose the mic.
 - The repo picker remembers past selections in `.voice/past_repos.md`, so previously used repositories reappear in the dropdown without retyping.
+- Completed issues show the most recently closed items first and append a `(completed YYYY-MM-DD HH:MM)` timestamp when they move to done so the bucket highlights when each entry landed in the “done” lane.
 - Optional realtime transcript relay server (FastAPI/Docker) that feeds a speech output window in the GUI.
 - Hotkey daemon for quick capture via whisper.cpp.
 - Optional GitHub bridge: push unchecked voice issues to GitHub using the `gh` CLI.
@@ -37,6 +38,12 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
    - PowerShell: `./codex_review_issues.ps1`
    - Bash: `./codex_review_issues.sh`
    Codex will use `.voice/voice-issues.md` as its task list, apply fixes, and tick items with notes.
+
+## Keyboard shortcuts
+- `Delete` removes the current selection from the focused bucket (pending/done/waitlist).
+- Click an already-selected issue to deselect it without touching a toolbar button.
+- `Escape` clears the active selection so the alternating buttons stay accessible.
+- The `Delete selected` action now lives beside `Remove duplicates` above the buckets so it always affects whichever list currently has focus.
 
 ## Sync voice issues to GitHub (optional)
 - Repo target comes from `RepoPointer.md.txt` or your `origin` remote; override with `--repo owner/name`.

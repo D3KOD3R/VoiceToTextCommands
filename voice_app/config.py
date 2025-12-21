@@ -103,15 +103,28 @@ class ConfigLoader:
         entry = config.repos.get(repo_key)
         if entry:
             return ConfigLoader._build_repo_config(repo_key, entry, repo_root)
+
+        repo_path: Path | None = None
         try:
-            repo_path = Path(repo_key).expanduser().resolve()
+            candidate = Path(repo_key).expanduser()
+            repo_path = candidate.resolve() if candidate.is_absolute() else (repo_root / candidate).resolve()
         except Exception:
-            raise ValueError(f"Config for repo '{repo_key}' is missing or incomplete.")
-        alias = ConfigLoader._find_alias_by_path(config.repos, repo_path, repo_root)
-        if alias:
-            return ConfigLoader._build_repo_config(alias, config.repos[alias], repo_root)
-        issues_file = (repo_path / ".voice" / "voice-issues.md").resolve()
-        return RepoConfig(repo_path=repo_path, issues_file=issues_file)
+            repo_path = None
+
+        if repo_path:
+            alias = ConfigLoader._find_alias_by_path(config.repos, repo_path, repo_root)
+            if alias:
+                return ConfigLoader._build_repo_config(alias, config.repos[alias], repo_root)
+
+        local_alias = ConfigLoader._find_alias_by_path(config.repos, repo_root, repo_root)
+        if local_alias:
+            return ConfigLoader._build_repo_config(local_alias, config.repos[local_alias], repo_root)
+
+        if repo_path:
+            issues_file = (repo_path / ".voice" / "voice-issues.md").resolve()
+            return RepoConfig(repo_path=repo_path, issues_file=issues_file)
+
+        raise ValueError(f"Config for repo '{repo_key}' is missing or incomplete.")
 
     @staticmethod
     def ensure_repo_entry(
