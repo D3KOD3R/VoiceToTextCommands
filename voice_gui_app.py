@@ -394,10 +394,11 @@ def transcribe_with_whisper_cpp(audio_file: Path, config) -> str:
 class TranscriptListener:
     """Background websocket listener to stream transcripts into the GUI."""
 
-    def __init__(self, url: str, on_message, on_log) -> None:
+    def __init__(self, url: str, on_message, on_log, on_status) -> None:
         self.url = url
         self.on_message = on_message
         self.on_log = on_log
+        self.on_status = on_status
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -412,43 +413,40 @@ class TranscriptListener:
         if self._thread:
             self._thread.join(timeout=2)
             self._thread = None
+            self._set_status("Realtime offline")
 
     def _run(self) -> None:
         try:
             import websockets  # type: ignore
         except Exception as exc:  # noqa: BLE001
             self.on_log(f"[warn] Realtime disabled: websockets import failed ({exc})")
+            self._set_status("Realtime unavailable (missing dependency)")
             return
         asyncio.run(self._listen(websockets))
 
+    def _set_status(self, text: str) -> None:
+        try:
+            self.on_status(text)
+        except Exception:
+            pass
+
     async def _listen(self, websockets) -> None:  # type: ignore[override]
-        backoff = 1
-        attempts = 0
-        while not self._stop.is_set():
-            try:
-                async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
-                    self.on_log(f"[info] Connected to realtime server: {self.url}")
-                    backoff = 1
-                    attempts = 0
-                    while not self._stop.is_set():
-                        try:
-                            msg = await asyncio.wait_for(ws.recv(), timeout=1)
-                        except asyncio.TimeoutError:
-                            continue
-                        self.on_message(msg)
-            except Exception as exc:  # noqa: BLE001
-                if self._stop.is_set():
-                    break
-                attempts += 1
-                if REALTIME_MAX_RECONNECTS and attempts >= REALTIME_MAX_RECONNECTS:
-                    self.on_log(
-                        f"[warn] Realtime disabled after {attempts} failed reconnect attempt(s): {exc}"
-                    )
-                    self._stop.set()
-                    break
-                self.on_log(f"[warn] Realtime reconnecting in {backoff}s: {exc}")
-                await asyncio.sleep(backoff)
-                backoff = min(10, backoff * 2)
+        self._set_status("Realtime: connecting...")
+        try:
+            async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
+                self.on_log(f"[info] Connected to realtime server: {self.url}")
+                self._set_status(f"Realtime: online ({self.url})")
+                while not self._stop.is_set():
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=1)
+                    except asyncio.TimeoutError:
+                        continue
+                    self.on_message(msg)
+        except Exception as exc:  # noqa: BLE001
+            if self._stop.is_set():
+                return
+            self.on_log(f"[warn] Realtime disabled: {exc}")
+            self._set_status("Realtime server not detected")
 class VoiceGUI:
     def __init__(self) -> None:
         self.config = ConfigLoader.load(DEFAULT_CONFIG_PATH)
@@ -496,6 +494,7 @@ class VoiceGUI:
         self.transcript_listener: TranscriptListener | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
+        self.realtime_status_var = StringVar(value="Realtime: unknown")
         self.repo_path_var = StringVar(value=str(self.repo_cfg.repo_path))
         self.issues_path_var = StringVar(value=str(self.repo_cfg.issues_file))
         self.hotkey_info_label: ttk.Label | None = None
@@ -550,6 +549,10 @@ class VoiceGUI:
         log_frame = ttk.Frame(parent)
         log_frame.pack(fill=BOTH, expand=False, padx=10, pady=(0, 10))
         ttk.Label(log_frame, text="Log:").pack(anchor="w")
+        status_row = ttk.Frame(log_frame)
+        status_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(status_row, text="Realtime:").pack(side=LEFT)
+        ttk.Label(status_row, textvariable=self.realtime_status_var).pack(side=LEFT)
         self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
         self.log_widget.pack(fill=BOTH, expand=False, pady=(2, 0))
         self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
@@ -819,6 +822,12 @@ class VoiceGUI:
         self.log_widget.config(state=DISABLED)
         self._write_runtime_log(msg)
 
+    def _set_realtime_status(self, text: str) -> None:
+        try:
+            self.realtime_status_var.set(text)
+        except Exception:
+            pass
+
     def _write_runtime_log(self, msg: str) -> None:
         """Mirror runtime log entries to a disk file for easy post-run inspection."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -842,6 +851,7 @@ class VoiceGUI:
             self.config.realtime_ws_url,
             on_message=self._handle_transcript_message,
             on_log=lambda m: self.root.after(0, lambda: self._log(m)),
+            on_status=lambda s: self.root.after(0, lambda: self._set_realtime_status(s)),
         )
         self.transcript_listener.start()
 
