@@ -69,6 +69,7 @@ from voice_gui_layout import build_layout_structure
 
 NOISY_NAMES = re.compile(r"(hands[- ]?free|hf audio|bthhfenum|telephony|communications|loopback|primary sound capture)", re.I)
 WATERFALL_WINDOW = 50  # number of samples to display (~5s at 10 Hz poll)
+REALTIME_MAX_RECONNECTS = 5  # stop retrying after this many consecutive failures
 WAIT_STATE_CHAR = "~"
 DONE_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M"
 DONE_TIMESTAMP_PATTERN = re.compile(r"\s*\(completed (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\)\s*$")
@@ -422,11 +423,13 @@ class TranscriptListener:
 
     async def _listen(self, websockets) -> None:  # type: ignore[override]
         backoff = 1
+        attempts = 0
         while not self._stop.is_set():
             try:
                 async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as ws:
                     self.on_log(f"[info] Connected to realtime server: {self.url}")
                     backoff = 1
+                    attempts = 0
                     while not self._stop.is_set():
                         try:
                             msg = await asyncio.wait_for(ws.recv(), timeout=1)
@@ -435,6 +438,13 @@ class TranscriptListener:
                         self.on_message(msg)
             except Exception as exc:  # noqa: BLE001
                 if self._stop.is_set():
+                    break
+                attempts += 1
+                if REALTIME_MAX_RECONNECTS and attempts >= REALTIME_MAX_RECONNECTS:
+                    self.on_log(
+                        f"[warn] Realtime disabled after {attempts} failed reconnect attempt(s): {exc}"
+                    )
+                    self._stop.set()
                     break
                 self.on_log(f"[warn] Realtime reconnecting in {backoff}s: {exc}")
                 await asyncio.sleep(backoff)
