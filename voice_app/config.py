@@ -34,6 +34,7 @@ class VoiceConfig:
     hotkey_quit: str
     device_allowlist: List[str]
     device_denylist: List[str]
+    device_last_selected: Optional[str]
     realtime_ws_url: Optional[str]
     realtime_post_url: Optional[str]
     repo_root: Path
@@ -64,6 +65,7 @@ class VoiceConfig:
             hotkey_quit=hotkeys.get("quit", "ctrl+alt+q"),
             device_allowlist=devices.get("allowlist") or [],
             device_denylist=devices.get("denylist") or [],
+            device_last_selected=devices.get("lastSelected"),
             realtime_ws_url=realtime.get("wsUrl"),
             realtime_post_url=realtime.get("postUrl"),
             repo_root=repo_root,
@@ -214,7 +216,7 @@ class ConfigLoader:
             if entry.get("issuesFile") != normalized_issues:
                 entry["issuesFile"] = normalized_issues
                 changed = True
-        if data.get("defaultRepo") != alias:
+        if not data.get("defaultRepo"):
             data["defaultRepo"] = alias
             changed = True
         return changed

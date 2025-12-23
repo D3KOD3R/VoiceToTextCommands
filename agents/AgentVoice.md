@@ -4,9 +4,9 @@
 - **Workflow**
   1. Always open `.voice/voice-issues.md` at the start of a fix request. Summarize outstanding entries so we know the work that remains.
  2. Use `VOICE_ISSUE_WORKFLOW.md` as the high-level process reference. The workflow reinforces: append issues immediately, tick them only when addressed, never delete without confirmation.
- 3. Prioritize issues in order. For each entry, plan how to satisfy the user’s request, implement the change, then either:
-     - Mark the item `[x]` with a clarifying note (e.g., “(layout stacked button row)”), or
-     - Explain in the response why it remains `[ ]` (e.g., “needs additional clarification / blocked on upstream change”).
+ 3. Prioritize issues in order. For each entry, mark it `[working on]` before starting work so the UI shows progress, implement the change, then either:
+     - Mark the item `[x]` with a clarifying note (e.g., "(layout stacked button row)"), or
+     - Explain in the response why it remains `[ ]` (e.g., "needs additional clarification / blocked on upstream change").
   4. Do not close the task until every entry that was present at the beginning of this session is accounted for (resolved or explained). If new issues are emitted during the work, capture them in the file and keep them in scope.
   5. Report in the final reply which voice issues were completed and which still require work, referencing their text and line number from `.voice/voice-issues.md`.
 

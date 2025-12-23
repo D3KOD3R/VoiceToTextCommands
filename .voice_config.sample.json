@@ -12,7 +12,8 @@
   },
   "devices": {
     "allowlist": [],
-    "denylist": []
+    "denylist": [],
+    "lastSelected": ""
   },
   "phrases": {
     "nextIssue": ["next issue", "next point"],

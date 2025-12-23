@@ -8,10 +8,14 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - Uses local STT via `whisper.cpp` (no API key needed).
 - GUI recorder with mic selection and live level (whisper.cpp backend).
 - GUI mic test with waterfall meter to confirm the mic is working.
+- Remembers the last selected input device and restores it on launch.
 - Manage issue states in the GUI (mark pending as done, undo completed items, delete, waitlist bucket with drag/drop, skip delete confirms, and wrap long text).
-- Settings panel now lists the configured hotkeys, repo path, and issues file in a static column, offers a one-click **Create voice file** helper, keeps the inputs grouped in left/right columns that match the mockup, and sits the Test Selected Mic button beside the device picker so checks happen where you choose the mic.
+- Settings panel now lists the configured hotkeys, repo path, and issues file in a static column, keeps the inputs grouped in left/right columns that match the mockup, and sits the Test Selected Mic button beside the device picker so checks happen where you choose the mic.
 - The repo picker remembers past selections in `.voice/past_repos.md`, so previously used repositories reappear in the dropdown without retyping.
 - When targeting another repo, the app creates a repo-local `voiceissues/` folder (workflow + agent + `.gitignore`) without touching the repo root.
+- Deleted issues are archived with Undo Delete and Empty Archive actions.
+- Plays a chime/logs a notification when a repo's pending issues reach zero.
+- The latest GUI action (drag, delete, edit, reorder) can be undone with `Ctrl+Z` without manually editing the file.
 - Completed issues show the most recently closed items first and append a `(completed YYYY-MM-DD HH:MM)` timestamp when they move to done so the bucket highlights when each entry landed in the "done" lane.
 - Optional realtime transcript relay server (FastAPI/Docker) that feeds a speech output window in the GUI.
 - Hotkey daemon for quick capture via whisper.cpp.
@@ -43,6 +47,8 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 
 ## Keyboard shortcuts
 - `Delete` removes the current selection from the focused bucket (pending/done/waitlist).
+- `Ctrl+D` removes the current selection from the focused bucket (matches "Delete selected").
+- `Ctrl+Z` undoes the most recent issues-file action (drag, delete, edit, reorder, or state change).
 - Click an already-selected issue to deselect it without touching a toolbar button.
 - `Escape` clears the active selection so the alternating buttons stay accessible.
 - The `Delete selected` action now lives beside `Remove duplicates` above the buckets so it always affects whichever list currently has focus.

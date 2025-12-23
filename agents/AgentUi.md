@@ -5,3 +5,4 @@
 - Default actions should be obvious (Start Recording, Stop & Transcribe).
 - Keep spacing and text readable; avoid clutter, truncate nothing important.
 - Always apply these UI rules on any desktop UI change and mention that this agent guided the update.
+- Any UI action that mutates the issues list must emit a log line and register with the global undo stack so `Ctrl+Z` can revert it consistently.

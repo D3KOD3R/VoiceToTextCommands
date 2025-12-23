@@ -5,6 +5,15 @@ The repo domain can be found in a file called RepoPointer.md use this for remote
 When the user says "merge to main", follow this complete workflow:
 Always acknowledge this workflow before merge-related work; do not skip it.
 
+## Assumed intent
+- Saying "merge to main" now signals that the current working tree is the payload you should commit and push; there is no need to wait for additional instructions about which files or features to include. Commit/push everything staged during the working-tree preparation step, then proceed with the merge to the remote `origin/main` branch as the final step.
+
+## Working-tree readiness (edge-case handling)
+- Treat the current working tree as the desired state for `main`/`origin/main`. Any unstaged or untracked files present when you hear "merge to main" should be staged (`git add -A`) and committed automatically (choose a conventional commit message that reflects the scope, e.g., `chore(main): prep merge`), unless the user explicitly objects. This ensures the rebase/pull can proceed without the earlier `dirty working tree` interruption.
+- If the tree still contains secrets or intentionally ignored files, warn the user and skip those files instead of forcing them into the commit.
+- After the commit, rerun `git status` to confirm the tree is clean before rebasing onto `origin/main`.
+- Once the working tree is clean and committed, continue with the pre-merge workflow below.
+
 ## Pre-Merge Preparation
 1. **Pull latest main** - Fetch and merge the latest changes from remote main.
 2. **Validate branch naming** - Create a conventional commits conform branch using kebab-case:
