@@ -46,9 +46,13 @@ These scripts:
 1. Verify `.voice/voice-issues.md` exists.
 2. Invoke `codex --full-auto` with instructions to:
    - Use the checklist as the task list.
+   - Before starting each task, update the item to `[working on]` so the UI shows progress.
+   - Work through each item in order until every entry present at the start is resolved or explicitly deferred.
    - For each addressed issue: modify the codebase, then change `[ ]` to `[x]` in `.voice/voice-issues.md` with a short note (e.g., `(fixed in file X)`).
    - After the user confirms the fix is acceptable, delete the resolved item from `.voice/voice-issues.md` (do not delete without confirmation).
-   - Avoid ticking items that were not actually worked on.
+    - Avoid ticking items that were not actually worked on.
+    - Begin coding immediately when the user asks to “fix issues”; do not wait for extra instructions before acting.
+3. Re-open `.voice/voice-issues.md` after completing the list to catch any newly added items, then continue.
 
 ## Acceptance Options
 - Trust mode: Codex fixes and ticks items in one run. If you revert changes, manually untick the item.

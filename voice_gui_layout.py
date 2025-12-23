@@ -32,7 +32,7 @@ def build_layout_structure(gui: "VoiceGUI") -> None:
     controls_frame.pack(fill=BOTH, expand=True)
     controls_frame.columnconfigure(0, weight=1)
     controls_frame.rowconfigure(1, weight=2)
-    controls_frame.rowconfigure(2, weight=1)
+    controls_frame.rowconfigure(2, weight=2)
     controls_frame.rowconfigure(3, weight=0)
     controls_frame.rowconfigure(4, weight=2)
 
@@ -47,8 +47,16 @@ def build_layout_structure(gui: "VoiceGUI") -> None:
 
     settings_section = ttk.Frame(controls_frame)
     settings_section.grid(row=2, column=0, sticky="nsew", padx=pad["padx"], pady=(0, pad["pady"]))
-    settings_section.columnconfigure(0, weight=1)
-    gui._build_settings_panel(settings_section, pad)
+    settings_section.columnconfigure(0, weight=2)
+    settings_section.columnconfigure(1, weight=1)
+    settings_left = ttk.Frame(settings_section)
+    settings_left.grid(row=0, column=0, sticky="nsew")
+    settings_left.columnconfigure(0, weight=1)
+    gui._build_settings_panel(settings_left, pad)
+    waterfall_section = ttk.Frame(settings_section)
+    waterfall_section.grid(row=0, column=1, sticky="nsew", padx=(pad["padx"], 0))
+    waterfall_section.columnconfigure(0, weight=1)
+    gui._build_audio_panel(waterfall_section, pad)
 
     action_section = ttk.Frame(controls_frame)
     action_section.grid(row=3, column=0, sticky="ew", padx=pad["padx"], pady=(0, pad["pady"]))
@@ -56,9 +64,7 @@ def build_layout_structure(gui: "VoiceGUI") -> None:
     gui._build_action_buttons(action_section, pad)
     gui._build_status_label(action_section, pad)
 
-    audio_section = ttk.Frame(controls_frame)
-    audio_section.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 6))
-    audio_section.columnconfigure(0, weight=1)
-    gui._build_audio_panel(audio_section, pad)
-
-    gui._build_log_block(gui.root)
+    log_section = ttk.Frame(controls_frame)
+    log_section.grid(row=4, column=0, sticky="nsew", padx=pad["padx"], pady=(0, pad["pady"]))
+    log_section.columnconfigure(0, weight=1)
+    gui._build_log_block(log_section)

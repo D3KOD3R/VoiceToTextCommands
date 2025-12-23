@@ -5,5 +5,6 @@ __pycache__/
 .tmp/
 .tmp/
 .voice/repo_history.json
+.voice/past_repos.md
 .voice/AgentVoice.md
 .voice/VOICE_ISSUE_WORKFLOW.md

@@ -2,7 +2,7 @@
   "repos": {
     "local": {
       "path": ".",
-      "issuesFile": ".voice/voice-issues.md"
+      "issuesFile": "voiceissues/voice-issues.md"
     }
   },
   "defaultRepo": "local",
@@ -12,7 +12,8 @@
   },
   "devices": {
     "allowlist": [],
-    "denylist": []
+    "denylist": [],
+    "lastSelected": ""
   },
   "phrases": {
     "nextIssue": ["next issue", "next point"],

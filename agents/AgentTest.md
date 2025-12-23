@@ -27,7 +27,7 @@ Always reference this checklist and state what was or was not run; do not skip t
 - If mic test fails (sample rate, device error), log and resolve.
 
 5) GUI recording
-- Start Recording, speak “first issue next issue second issue end issues”, Stop & Transcribe. Verify `.voice/voice-issues.md` appended with two items.
+- Start Recording, speak "first issue next issue second issue end issues", Stop & Transcribe. Verify the issues file (default `voiceissues/voice-issues.md`, legacy `.voice/voice-issues.md`) appended with two items.
 - If sample rate errors occur, ensure fallbacks succeed; otherwise log and fix.
 
 6) Hotkey daemon

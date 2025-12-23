@@ -8,7 +8,7 @@ Features:
 - Start/stop recording with buttons
 - Live input level meter while recording
 - Transcribe with whisper.cpp using paths from .voice_config.json (repo-local)
-- Append each detected issue immediately to .voice/voice-issues.md
+- Append each detected issue immediately to the configured issues file (defaults to voiceissues/voice-issues.md for new repos)
 
 Run:
   python voice_gui.py
@@ -42,12 +42,20 @@ try:
     import keyboard  # type: ignore
 except Exception:  # noqa: BLE001
     keyboard = None
+try:
+    import winsound  # type: ignore
+except Exception:  # noqa: BLE001
+    winsound = None
 
 # Ensure repo root is importable regardless of CWD
 ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
 AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
 VOICE_WORKFLOW_SOURCE = ROOT / "VOICE_ISSUE_WORKFLOW.md"
+GITIGNORE_RULES_PATH = ROOT / "config" / "gitignore_rules.json"
+VOICEISSUES_AGENT_SOURCE = ROOT / "agents" / "VoiceIssuesAgent.md"
+VOICEISSUES_WORKFLOW_SOURCE = ROOT / "config" / "voiceissues_workflow.md"
+VOICEISSUES_GITIGNORE_SOURCE = ROOT / "config" / "voiceissues_gitignore.txt"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
 LOG_PATH = ROOT / ".tmp" / "voice_gui.log"
@@ -55,6 +63,7 @@ LOG_LOCK = threading.Lock()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from voice_app.gitignore import ensure_gitignore_rules, ensure_local_gitignore
 from voice_issue_daemon import (
     ConfigLoader,
     DEFAULT_CONFIG_PATH,
@@ -460,9 +469,10 @@ class VoiceGUI:
         self.tmp_wav: Path | None = None
         self.mic_tester = MicTester()
         self.device_list = list_input_devices(self.config.device_allowlist, self.config.device_denylist)
-        self.selected_device_id: int | None = self.device_list[0]["id"] if self.device_list else None
-        self.selected_device_name: str = self.device_list[0]["name"] if self.device_list else "None"
-        self.selected_device_hostapi: int | None = self.device_list[0].get("hostapi") if self.device_list else None
+        self.selected_device_id: int | None = None
+        self.selected_device_name: str = "None"
+        self.selected_device_hostapi: int | None = None
+        self._select_device_from_config()
         self.controls_frame = ttk.Frame(self.root)
         self.status_var: ttk.Label | None = None
         self.log_widget: scrolledtext.ScrolledText | None = None
@@ -486,10 +496,16 @@ class VoiceGUI:
         self.pending_row_map: list[int] = []
         self.done_row_map: list[int] = []
         self.wait_row_map: list[int] = []
+        self._pending_counts_by_repo: dict[str, int] = {}
+        self._last_deleted_by_repo: dict[str, list[dict[str, list[str]]]] = {}
+        self._undo_stack: dict[str, list[dict[str, str]]] = {}
+        self._issue_mtime_by_repo: dict[str, float] = {}
         self._listbox_select_guard = False
         self.waterfall_history: list[float] = []
         self.skip_delete_confirm = BooleanVar(value=False)
         self._drag_info: dict | None = None
+        self._suppress_release_drag = False
+        self._toggle_target: tuple[Listbox, int] | None = None
         self.waterfall_status: ttk.Label | None = None
         self.transcript_listener: TranscriptListener | None = None
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
@@ -500,9 +516,14 @@ class VoiceGUI:
         self.hotkey_info_label: ttk.Label | None = None
         self.repo_info_label: ttk.Label | None = None
         self.issues_info_label: ttk.Label | None = None
+        self.hotkey_toggle_entry: ttk.Entry | None = None
+        self.hotkey_quit_entry: ttk.Entry | None = None
+        self.issues_path_entry: ttk.Entry | None = None
         self.device_combo: ttk.Combobox | None = None
+        self.refresh_btn: ttk.Button | None = None
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
+        self._last_repo_prepared: Path | None = None
         self.dark_mode_var = BooleanVar(value=False)
         self.dark_mode_icon_var = StringVar(value="🌙")
         self.dark_mode_text_var = StringVar(value="Dark mode")
@@ -519,9 +540,14 @@ class VoiceGUI:
         self.root.after(100, self._poll_level)
         self._register_hotkeys()
         self._refresh_issue_list()
+        self.root.after(750, self._poll_issue_file)
         self._start_transcript_listener()
         self._cleanup_tmp_dir()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind_all("<Control-z>", self._handle_ctrl_z)
+        self.root.bind_all("<Control-Z>", self._handle_ctrl_z)
+        self.root.bind_all("<Control-d>", self._handle_ctrl_d)
+        self.root.bind_all("<Control-D>", self._handle_ctrl_d)
 
     def _build_layout(self) -> None:
         build_layout_structure(self)
@@ -545,16 +571,16 @@ class VoiceGUI:
         self.status_var = ttk.Label(parent, text="Ready")
         self.status_var.pack(anchor="w", **pad)
 
-    def _build_log_block(self, parent: Tk) -> None:
+    def _build_log_block(self, parent: Tk | ttk.Frame) -> None:
         log_frame = ttk.Frame(parent)
-        log_frame.pack(fill=BOTH, expand=False, padx=10, pady=(0, 10))
+        log_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
         ttk.Label(log_frame, text="Log:").pack(anchor="w")
         status_row = ttk.Frame(log_frame)
         status_row.pack(fill="x", pady=(0, 4))
         ttk.Label(status_row, text="Realtime:").pack(side=LEFT)
         ttk.Label(status_row, textvariable=self.realtime_status_var).pack(side=LEFT)
         self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
-        self.log_widget.pack(fill=BOTH, expand=False, pady=(2, 0))
+        self.log_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
         self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
 
     def _build_move_buttons(self, parent: ttk.Frame) -> None:
@@ -571,6 +597,8 @@ class VoiceGUI:
             text="Skip delete confirmation",
             variable=self.skip_delete_confirm,
         ).pack(side=LEFT, padx=(4, 0))
+        ttk.Button(move_all_row, text="Empty archive", command=self._empty_archive).pack(side=RIGHT, padx=(0, 4))
+        ttk.Button(move_all_row, text="Undo delete", command=self._undo_delete).pack(side=RIGHT, padx=(0, 4))
 
     def _build_issue_column(self, parent: ttk.Frame, label: str, bucket: str) -> None:
         column = ttk.Frame(parent, padding=(4, 0, 0, 0))
@@ -599,7 +627,8 @@ class VoiceGUI:
             listbox.bind("<<ListboxSelect>>", lambda e: self._on_wait_select())
         self.issue_header_labels[bucket] = (header, base_label)
         listbox.bind("<ButtonPress-1>", lambda e, b=bucket: self._handle_listbox_primary_click(e, b))
-        listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._finish_drag(e, b))
+        listbox.bind("<ButtonRelease-1>", lambda e, b=bucket: self._handle_listbox_release(e, b))
+        listbox.bind("<B1-Motion>", lambda e, b=bucket: self._handle_listbox_motion(e, b))
         listbox.bind("<Double-Button-1>", lambda e, b=bucket: self._on_issue_double_click(e, b))
 
         btn_row = ttk.Frame(column)
@@ -626,9 +655,20 @@ class VoiceGUI:
         hk_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
         ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16).pack(side=LEFT, padx=(0, 10))
+        self.hotkey_toggle_entry = ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16)
+        self.hotkey_toggle_entry.pack(side=LEFT, padx=(0, 10))
         ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16).pack(side=LEFT, padx=(0, 10))
+        self.hotkey_quit_entry = ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16)
+        self.hotkey_quit_entry.pack(side=LEFT, padx=(0, 10))
+
+        def bind_auto_apply(widget: ttk.Widget) -> None:
+            widget.bind("<Return>", lambda _e: self._apply_settings())
+            widget.bind("<FocusOut>", lambda _e: self._apply_settings())
+
+        if self.hotkey_toggle_entry:
+            bind_auto_apply(self.hotkey_toggle_entry)
+        if self.hotkey_quit_entry:
+            bind_auto_apply(self.hotkey_quit_entry)
 
         path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         path_row.pack(fill=BOTH, **pad)
@@ -647,28 +687,23 @@ class VoiceGUI:
             width=70,
         )
         self.repo_combo.pack(side=LEFT, padx=(0, 10))
+        if self.repo_combo:
+            bind_auto_apply(self.repo_combo)
         ttk.Button(path_row, text="Browse...", width=8, command=self._browse_repo_path).pack(side=LEFT, padx=(0, 6))
         self._update_repo_combo_values(current_repo=self.repo_cfg.repo_path)
 
         issue_path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70).pack(side=LEFT, padx=(0, 10))
-        ttk.Label(issue_path_row, text="🗣️", font=("Segoe UI Emoji", 12)).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(
-            issue_path_row,
-            text="Create voice file",
-            width=16,
-            command=self._create_voice_file_for_selected_repo,
-        ).pack(side=LEFT, padx=(0, 6))
-
-        apply_btn = ttk.Button(left_col, text="Apply settings", command=self._apply_settings, width=18)
-        apply_btn.pack(anchor="w", padx=10, pady=(0, 6))
+        self.issues_path_entry = ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70)
+        self.issues_path_entry.pack(side=LEFT, padx=(0, 10))
+        if self.issues_path_entry:
+            bind_auto_apply(self.issues_path_entry)
 
         device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         device_row.columnconfigure(0, weight=0)
-        device_row.columnconfigure(1, weight=4)
+        device_row.columnconfigure(1, weight=0)
         device_row.columnconfigure(2, weight=0)
         device_row.columnconfigure(3, weight=0)
         device_row.columnconfigure(4, weight=0)
@@ -680,15 +715,32 @@ class VoiceGUI:
             state="readonly",
             width=32,
         )
-        self.device_combo.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        self.device_combo.grid(row=0, column=1, sticky="w", padx=(0, 6))
         if self.device_list:
-            self.device_combo.current(0)
+            selected_index = 0
+            if self.selected_device_id is not None:
+                for idx, dev in enumerate(self.device_list):
+                    if dev.get("id") == self.selected_device_id:
+                        selected_index = idx
+                        break
+            self.device_combo.current(selected_index)
             self.device_combo.bind("<<ComboboxSelected>>", self.on_device_change)
         self.test_cta_btn = ttk.Button(device_row, text="Test Selected Mic", command=self.toggle_mic_test, width=16)
         self.test_cta_btn.grid(row=0, column=2, sticky="w", padx=(0, 6))
-        ttk.Button(device_row, text="Refresh", command=self.refresh_devices).grid(row=0, column=3, sticky="e", padx=(0, 6))
+        self.refresh_btn = ttk.Button(device_row, text="Refresh", command=self.refresh_devices)
+        self.refresh_btn.grid(row=0, column=3, sticky="w", padx=(0, 6))
         self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
-        self.live_indicator.grid(row=0, column=4, sticky="e", padx=(0, 0))
+        self.live_indicator.grid(row=0, column=4, sticky="e")
+
+        info_frame = ttk.Frame(left_col, padding=(6, 4, 6, 0))
+        info_frame.pack(fill="x", pady=(6, 0))
+        info_frame.columnconfigure(0, weight=1)
+        self.hotkey_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9, "bold"))
+        self.hotkey_info_label.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        self.repo_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
+        self.repo_info_label.grid(row=1, column=0, sticky="ew", pady=(0, 2))
+        self.issues_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
+        self.issues_info_label.grid(row=2, column=0, sticky="ew")
         self._refresh_static_info()
         self._update_theme()
 
@@ -717,7 +769,24 @@ class VoiceGUI:
             insertcolor=palette["fg"],
             insertbackground=palette["fg"],
         )
-        self.style.configure("TCombobox", fieldbackground=palette["entry_bg"], foreground=palette["fg"])
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=palette["entry_bg"],
+            foreground=palette["fg"],
+            background=palette["entry_bg"],
+            selectbackground=palette["select_bg"],
+            selectforeground=palette["select_fg"],
+        )
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", palette["entry_bg"]), ("!disabled", palette["entry_bg"])],
+            foreground=[("readonly", palette["fg"]), ("!disabled", palette["fg"])],
+            background=[("readonly", palette["entry_bg"]), ("!disabled", palette["entry_bg"])],
+        )
+        self.root.option_add("*TCombobox*Listbox*background", palette["list_bg"])
+        self.root.option_add("*TCombobox*Listbox*foreground", palette["fg"])
+        self.root.option_add("*TCombobox*Listbox*selectBackground", palette["select_bg"])
+        self.root.option_add("*TCombobox*Listbox*selectForeground", palette["select_fg"])
         self.root.configure(background=palette["root_bg"])
         for lb in (self.issue_listbox, self.issue_listbox_done, self.issue_listbox_wait):
             if lb:
@@ -741,8 +810,8 @@ class VoiceGUI:
             self.test_canvas.configure(background=palette["canvas_bg"])
         if self.dark_mode_icon_label:
             self.dark_mode_icon_label.config(background=palette["panel_bg"], foreground=palette["accent"])
-        info_bg = palette["accent"]
-        info_fg = palette["select_fg"]
+        info_bg = palette["panel_bg"]
+        info_fg = palette["fg"]
         for label in (self.hotkey_info_label, self.repo_info_label, self.issues_info_label):
             if label:
                 label.config(background=info_bg, foreground=info_fg)
@@ -776,12 +845,12 @@ class VoiceGUI:
 
     def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         wf_header = ttk.Frame(parent)
-        wf_header.pack(fill=BOTH, padx=10, pady=(4, 0))
+        wf_header.pack(fill=BOTH, padx=pad["padx"], pady=(4, 0))
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
-        self.test_canvas = Canvas(parent, height=280, bg="#1e1e1e", highlightthickness=0)
-        self.test_canvas.pack(fill=BOTH, expand=True, padx=10, pady=(0, 5))
+        self.test_canvas = Canvas(parent, height=260, bg="#1e1e1e", highlightthickness=0)
+        self.test_canvas.pack(fill=BOTH, expand=True, padx=pad["padx"], pady=(0, 5))
 
     def _build_action_buttons(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         btn_row = ttk.Frame(parent)
@@ -801,16 +870,6 @@ class VoiceGUI:
         self._build_issue_column(lists_row, "Pending issues:", "pending")
         self._build_issue_column(lists_row, "Completed issues:", "done")
         self._build_issue_column(lists_row, "Waitlist issues:", "wait")
-
-        info_frame = ttk.Frame(panel, padding=(6, 4, 6, 0))
-        info_frame.pack(fill="x", pady=(6, 0))
-        info_frame.columnconfigure(0, weight=1)
-        self.hotkey_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9, "bold"))
-        self.hotkey_info_label.grid(row=0, column=0, sticky="ew", pady=(0, 2))
-        self.repo_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
-        self.repo_info_label.grid(row=1, column=0, sticky="ew", pady=(0, 2))
-        self.issues_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
-        self.issues_info_label.grid(row=2, column=0, sticky="ew")
 
 
     def _log(self, msg: str) -> None:
@@ -878,12 +937,13 @@ class VoiceGUI:
             for idx, line in enumerate(lines):
                 stripped = line.strip()
                 if stripped.startswith("- [") or stripped.startswith("* ["):
-                    # Determine state by second char after '['
-                    state_char = stripped[3:4] if len(stripped) > 3 else " "
-                    if state_char.lower() == "x":
+                    state_token = stripped.split("]", 1)[0].split("[", 1)[1].strip().lower()
+                    if state_token in ("x", "done"):
                         done.append(([idx], stripped))
-                    elif state_char.lower() in (WAIT_STATE_CHAR, "w"):
+                    elif state_token in (WAIT_STATE_CHAR, "wait", "waitlist", "w"):
                         wait.append(([idx], stripped))
+                    elif state_token in ("working on", "working", "in progress", "wip"):
+                        pending.append(([idx], stripped))
                     else:
                         pending.append(([idx], stripped))
             self.issue_entries_pending = pending
@@ -905,8 +965,51 @@ class VoiceGUI:
             self._update_issue_header("pending", len(pending))
             self._update_issue_header("done", len(done))
             self._update_issue_header("wait", len(wait))
+            self._maybe_notify_completion(len(pending), len(done))
+            repo_key = str(self.repo_cfg.repo_path)
+            try:
+                self._issue_mtime_by_repo[repo_key] = self.repo_cfg.issues_file.stat().st_mtime
+            except Exception:
+                pass
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Unable to read issues file {self.repo_cfg.issues_file}: {exc}")
+
+    def _poll_issue_file(self) -> None:
+        try:
+            repo_key = str(self.repo_cfg.repo_path)
+            if self.repo_cfg.issues_file.exists():
+                mtime = self.repo_cfg.issues_file.stat().st_mtime
+                last_mtime = self._issue_mtime_by_repo.get(repo_key)
+                if last_mtime is None:
+                    self._issue_mtime_by_repo[repo_key] = mtime
+                elif mtime > last_mtime:
+                    self._issue_mtime_by_repo[repo_key] = mtime
+                    self._refresh_issue_list()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Issue file watcher failed: {exc}")
+        finally:
+            self.root.after(750, self._poll_issue_file)
+
+    def _maybe_notify_completion(self, pending_count: int, done_count: int) -> None:
+        repo_key = str(self.repo_cfg.repo_path)
+        prev_pending = self._pending_counts_by_repo.get(repo_key)
+        self._pending_counts_by_repo[repo_key] = pending_count
+        if prev_pending is None or prev_pending <= 0 or pending_count != 0:
+            return
+        self._notify_repo_completion(self.repo_cfg.repo_path, done_count)
+
+    def _notify_repo_completion(self, repo_path: Path, done_count: int) -> None:
+        message = f"Issues completed: {done_count} in {repo_path}"
+        if self.status_var:
+            self.status_var.config(text=message)
+        self._log(f"[ok] {message}")
+        try:
+            if winsound:
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            else:
+                self.root.bell()
+        except Exception:
+            pass
 
     def _populate_issue_listbox(self, listbox: Listbox, entries: list[tuple[list[int], str]], row_map: list[int]) -> None:
         wrap_width = 70
@@ -938,6 +1041,8 @@ class VoiceGUI:
 
     def _start_drag(self, event, source: str) -> None:
         listbox = event.widget
+        if not isinstance(listbox, Listbox):
+            return
         try:
             row = listbox.nearest(event.y)
         except Exception:
@@ -945,8 +1050,25 @@ class VoiceGUI:
         row_map = self._row_map_for_source(source)
         if row_map is None or row < 0 or row >= len(row_map):
             return
-        entry_idx = row_map[row]
-        self._drag_info = {"source": source, "entry_idx": entry_idx}
+        selection = listbox.curselection()
+        entry_indices: list[int] = []
+        seen: set[int] = set()
+        for row_idx in selection:
+            if 0 <= row_idx < len(row_map):
+                entry_idx = row_map[row_idx]
+                if entry_idx not in seen:
+                    seen.add(entry_idx)
+                    entry_indices.append(entry_idx)
+        if not entry_indices:
+            fallback_idx = row_map[row]
+            entry_indices.append(fallback_idx)
+        self._drag_info = {
+            "source": source,
+            "listbox": listbox,
+            "row_map": row_map,
+            "row": row,
+            "entry_indices": entry_indices,
+        }
 
     def _finish_drag(self, event, target: str) -> None:
         """
@@ -957,8 +1079,12 @@ class VoiceGUI:
         info = self._drag_info
         self._drag_info = None
         source = info.get("source")
-        entry_idx = info.get("entry_idx")
-        if entry_idx is None:
+        listbox = info.get("listbox")
+        row_map = info.get("row_map")
+        if not row_map or not source:
+            return
+        entry_indices = info.get("entry_indices") or []
+        if not entry_indices:
             return
 
         # Resolve drop target from the widget under the cursor to allow cross-list drags.
@@ -968,15 +1094,22 @@ class VoiceGUI:
             return
 
         entries = self._entries_for_source(source)
-        if entries is None or not (0 <= entry_idx < len(entries)):
+        if entries is None:
             return
-        idx_list, _ = entries[entry_idx]
-        targets = set(idx_list)
+        targets: set[int] = set()
+        for entry_idx in entry_indices:
+            if 0 <= entry_idx < len(entries):
+                idx_list, _ = entries[entry_idx]
+                targets.update(idx_list)
+        if not targets:
+            return
         state_char = self._state_char_for_target(resolved_target)
         if state_char is None:
             return
         try:
             lines = self._sanitize_issues_file()
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "drag move")
             new_lines = []
             for i, line in enumerate(lines):
                 if i in targets:
@@ -988,9 +1121,49 @@ class VoiceGUI:
                 text += "\n"
             self.repo_cfg.issues_file.write_text(text, encoding="utf-8")
             self._refresh_issue_list()
+            self._reselect_entries_in_bucket(resolved_target, entry_indices)
             self._log(f"[ok] Dragged {len(targets)} issue(s) to {resolved_target}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to move issue(s): {exc}")
+
+    def _push_undo_state(self, repo_path: Path, text: str, label: str) -> None:
+        repo_key = str(repo_path)
+        stack = self._undo_stack.setdefault(repo_key, [])
+        stack.append({"label": label, "text": text})
+        if len(stack) > 25:
+            stack.pop(0)
+
+    def _perform_undo(self) -> None:
+        repo_key = str(self.repo_cfg.repo_path)
+        stack = self._undo_stack.get(repo_key)
+        if not stack:
+            self._log("[info] Nothing to undo.")
+            return
+        entry = stack.pop()
+        prev_text = entry.get("text", "")
+        label = entry.get("label", "action")
+        try:
+            self.repo_cfg.issues_file.write_text(prev_text, encoding="utf-8")
+            self._refresh_issue_list()
+            remaining = len(stack)
+            note = f" (remaining undo steps: {remaining})" if remaining else ""
+            self._log(f"[ok] Undo {label}{note}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to apply undo: {exc}")
+
+    def _handle_ctrl_z(self, event=None) -> str:
+        self._perform_undo()
+        return "break"
+
+    def _handle_ctrl_d(self, event=None) -> str:
+        focused = self.root.focus_get()
+        listboxes = (self.issue_listbox, self.issue_listbox_done, self.issue_listbox_wait)
+        if focused not in listboxes:
+            has_selection = any(lb and lb.curselection() for lb in listboxes)
+            if not has_selection:
+                return "break"
+        self._delete_selected_current_bucket()
+        return "break"
 
     def _row_map_for_source(self, source: str) -> list[int] | None:
         if source == "pending":
@@ -1009,6 +1182,20 @@ class VoiceGUI:
         if source == "wait":
             return self.issue_entries_wait
         return None
+
+    def _reselect_entries_in_bucket(self, bucket: str, entry_indices: list[int]) -> None:
+        if not entry_indices:
+            return
+        listbox = self._listbox_for_bucket(bucket)
+        row_map = self._row_map_for_listbox(listbox) if listbox else None
+        if not listbox or not row_map:
+            return
+        listbox.selection_clear(0, END)
+        for row_idx, entry_idx in enumerate(row_map):
+            if entry_idx in entry_indices:
+                listbox.select_set(row_idx)
+                listbox.see(row_idx)
+        self._expand_issue_selection(listbox, row_map)
 
     def _entry_for_bucket(self, bucket: str, list_index: int) -> tuple[list[int], str] | None:
         row_map = self._row_map_for_source(bucket)
@@ -1072,6 +1259,8 @@ class VoiceGUI:
 
     def _apply_issue_edit(self, target_indices: Iterable[int], new_text: str) -> None:
         try:
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "edit issue")
             lines = self._sanitize_issues_file()
             for idx in set(target_indices):
                 if 0 <= idx < len(lines):
@@ -1147,6 +1336,51 @@ class VoiceGUI:
             listbox.selection_clear(0, END)
         return "break"
 
+    def _select_next_row(self, listbox: Listbox | None, target_index: int) -> None:
+        if not listbox:
+            return
+        if target_index < 0:
+            return
+        size = listbox.size()
+        if size <= 0:
+            return
+        next_idx = min(target_index, size - 1)
+        listbox.selection_clear(0, END)
+        listbox.select_set(next_idx)
+        listbox.activate(next_idx)
+        listbox.see(next_idx)
+        row_map = self._row_map_for_listbox(listbox)
+        if row_map:
+            self._expand_issue_selection(listbox, row_map)
+
+    def _row_map_for_listbox(self, listbox: Listbox) -> list[int] | None:
+        if listbox == self.issue_listbox:
+            return self.pending_row_map
+        if listbox == self.issue_listbox_done:
+            return self.done_row_map
+        if listbox == self.issue_listbox_wait:
+            return self.wait_row_map
+        return None
+
+    def _clear_other_listbox_selections(self, active: Listbox) -> None:
+        for lb in (self.issue_listbox, self.issue_listbox_done, self.issue_listbox_wait):
+            if lb and lb is not active:
+                lb.selection_clear(0, END)
+
+    @staticmethod
+    def _selected_entry_indices(listbox: Listbox, row_map: list[int]) -> set[int]:
+        selected: set[int] = set()
+        for row in listbox.curselection():
+            if 0 <= row < len(row_map):
+                selected.add(row_map[row])
+        return selected
+
+    @staticmethod
+    def _select_entry_lines(listbox: Listbox, row_map: list[int], entry_idx: int) -> None:
+        for row_idx, mapped in enumerate(row_map):
+            if mapped == entry_idx:
+                listbox.select_set(row_idx)
+
     def _handle_listbox_primary_click(self, event, bucket: str) -> None:
         listbox = event.widget
         if not isinstance(listbox, Listbox):
@@ -1156,14 +1390,67 @@ class VoiceGUI:
         if row < 0:
             return
 
-        modifiers = event.state & (1 | 4 | 8)
+        row_map = self._row_map_for_listbox(listbox)
+        if row_map is None or row >= len(row_map):
+            return
+        try:
+            listbox.focus_set()
+        except Exception:
+            pass
+        entry_idx = row_map[row]
+        is_ctrl = bool(event.state & 0x0004)
+        self._suppress_release_drag = False
+        self._toggle_target = None
+        if not is_ctrl:
+            self._clear_other_listbox_selections(listbox)
+        selected_entries = self._selected_entry_indices(listbox, row_map)
         selection = listbox.curselection()
-        if modifiers == 0 and row in selection:
+        row_selected = row in selection
+        selection_len = len(selection)
+
+        if is_ctrl:
+            if entry_idx in selected_entries:
+                for row_idx, mapped in enumerate(row_map):
+                    if mapped == entry_idx:
+                        listbox.selection_clear(row_idx)
+            else:
+                self._select_entry_lines(listbox, row_map, entry_idx)
+            self.root.after(1, lambda e=event: self._start_drag(e, bucket))
+            return None
+
+        if entry_idx in selected_entries and len(selected_entries) == 1:
+            self._suppress_release_drag = True
+            self._toggle_target = (listbox, row)
             listbox.selection_clear(0, END)
             return "break"
 
-        self._start_drag(event, bucket)
+        keep_selection = row_selected and selection_len > 1
+        self._suppress_release_drag = False
+        self._toggle_target = None
+        if not keep_selection:
+            listbox.selection_clear(0, END)
+            listbox.select_set(row)
+        self._expand_issue_selection(listbox, row_map)
 
+        self._start_drag(event, bucket)
+        return "break"
+
+    def _handle_listbox_release(self, event, bucket: str) -> str:
+        listbox = event.widget
+        if self._suppress_release_drag and self._toggle_target and self._toggle_target[0] == listbox:
+            self._suppress_release_drag = False
+            self._toggle_target = None
+            if isinstance(listbox, Listbox):
+                listbox.selection_clear(0, END)
+            return "break"
+        self._finish_drag(event, bucket)
+        self._toggle_target = None
+        return None
+
+    def _handle_listbox_motion(self, event, bucket: str) -> None:
+        if self._suppress_release_drag:
+            self._suppress_release_drag = False
+            self._toggle_target = None
     def _setup_listbox_accessibility(self, listbox: Listbox, bucket: str) -> None:
         palette = self._current_palette()
         listbox.configure(
@@ -1280,6 +1567,8 @@ class VoiceGUI:
                 new_entries.append((new_state, new_text))
             else:
                 new_entries.append((state, text))
+        current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+        self._push_undo_state(self.repo_cfg.repo_path, current_text, "reorder pending")
         self._write_issue_entries(new_entries)
         self._refresh_issue_list()
         self._log(f"[ok] Reordered {len(selected_ids)} pending issue(s).")
@@ -1290,6 +1579,7 @@ class VoiceGUI:
         selection = self.issue_listbox.curselection()
         if not selection:
             return
+        target_index = min(selection)
         entry_ids: set[int] = set()
         items = []
         for row in selection:
@@ -1306,14 +1596,19 @@ class VoiceGUI:
             if not confirm:
                 return
         try:
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "delete pending")
             lines = self._sanitize_issues_file()
             to_remove = {idx for idx_list, _ in items for idx in idx_list}
+            removed_lines = [lines[i] for i in sorted(to_remove) if 0 <= i < len(lines)]
             new_lines = [line for i, line in enumerate(lines) if i not in to_remove]
             text = "\n".join(new_lines)
             if text and not text.endswith("\n"):
                 text += "\n"
             self.repo_cfg.issues_file.write_text(text, encoding="utf-8")
             self._refresh_issue_list()
+            self._select_next_row(self.issue_listbox, target_index)
+            self._store_deleted_lines("pending", removed_lines)
             self._log(f"[ok] Deleted {len(items)} pending issue(s) from {self.repo_cfg.issues_file}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to delete issue(s): {exc}")
@@ -1324,6 +1619,7 @@ class VoiceGUI:
         selection = self.issue_listbox_done.curselection()
         if not selection:
             return
+        target_index = min(selection)
         entry_ids: set[int] = set()
         items = []
         for row in selection:
@@ -1340,14 +1636,19 @@ class VoiceGUI:
             if not confirm:
                 return
         try:
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "delete completed")
             lines = self._sanitize_issues_file()
             to_remove = {idx for idx_list, _ in items for idx in idx_list}
+            removed_lines = [lines[i] for i in sorted(to_remove) if 0 <= i < len(lines)]
             new_lines = [line for i, line in enumerate(lines) if i not in to_remove]
             text = "\n".join(new_lines)
             if text and not text.endswith("\n"):
                 text += "\n"
             self.repo_cfg.issues_file.write_text(text, encoding="utf-8")
             self._refresh_issue_list()
+            self._select_next_row(self.issue_listbox_done, target_index)
+            self._store_deleted_lines("completed", removed_lines)
             self._log(f"[ok] Deleted {len(items)} completed issue(s) from {self.repo_cfg.issues_file}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to delete issue(s): {exc}")
@@ -1358,6 +1659,7 @@ class VoiceGUI:
         selection = self.issue_listbox_wait.curselection()
         if not selection:
             return
+        target_index = min(selection)
         entry_ids: set[int] = set()
         items = []
         for row in selection:
@@ -1374,17 +1676,104 @@ class VoiceGUI:
             if not confirm:
                 return
         try:
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "delete waitlist")
             lines = self._sanitize_issues_file()
             to_remove = {idx for idx_list, _ in items for idx in idx_list}
+            removed_lines = [lines[i] for i in sorted(to_remove) if 0 <= i < len(lines)]
             new_lines = [line for i, line in enumerate(lines) if i not in to_remove]
             text = "\n".join(new_lines)
             if text and not text.endswith("\n"):
                 text += "\n"
             self.repo_cfg.issues_file.write_text(text, encoding="utf-8")
             self._refresh_issue_list()
+            self._select_next_row(self.issue_listbox_wait, target_index)
+            self._store_deleted_lines("waitlist", removed_lines)
             self._log(f"[ok] Deleted {len(items)} waitlist issue(s) from {self.repo_cfg.issues_file}")
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Failed to delete issue(s): {exc}")
+
+    def _archive_path(self) -> Path:
+        return self.repo_cfg.issues_file.parent / "archive-issues.md"
+
+    def _append_to_archive(self, lines: list[str], bucket: str) -> None:
+        if not lines:
+            return
+        archive_path = self._archive_path()
+        if not archive_path.exists():
+            archive_path.write_text("# Archived issues\n\n", encoding="utf-8")
+        header = f"## {bucket.title()} archive {datetime.now():%Y-%m-%d %H:%M}"
+        try:
+            content = archive_path.read_text(encoding="utf-8")
+        except Exception:
+            content = ""
+        newline_prefix = "" if not content or content.endswith("\n") else "\n"
+        with archive_path.open("a", encoding="utf-8") as fh:
+            if newline_prefix:
+                fh.write(newline_prefix)
+            fh.write(header + "\n")
+            for line in lines:
+                cleaned = line.strip()
+                if not cleaned:
+                    continue
+                fh.write(cleaned + "\n")
+            fh.write("\n")
+
+    def _store_deleted_lines(self, bucket: str, lines: list[str]) -> None:
+        if not lines:
+            return
+        repo_key = str(self.repo_cfg.repo_path)
+        stack = self._last_deleted_by_repo.setdefault(repo_key, [])
+        stack.append({"bucket": bucket, "lines": list(lines)})
+        self._append_to_archive(lines, bucket)
+
+    def _undo_delete(self) -> None:
+        repo_key = str(self.repo_cfg.repo_path)
+        stack = self._last_deleted_by_repo.get(repo_key)
+        if not stack:
+            self._log("[info] Nothing to undo.")
+            return
+        entry = stack.pop()
+        lines = entry.get("lines") or []
+        bucket = entry.get("bucket", "issues")
+        remaining = len(stack)
+        try:
+            current_text = ""
+            if self.repo_cfg.issues_file.exists():
+                current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "undo delete")
+            needs_newline = False
+            if self.repo_cfg.issues_file.exists():
+                text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+                needs_newline = bool(text) and not text.endswith("\n")
+            with self.repo_cfg.issues_file.open("a", encoding="utf-8") as fh:
+                if needs_newline:
+                    fh.write("\n")
+                for line in lines:
+                    cleaned = line.strip()
+                    if cleaned:
+                        fh.write(cleaned + "\n")
+            self._refresh_issue_list()
+            note = f" (remaining undo levels: {remaining})" if remaining else ""
+            self._log(f"[ok] Restored {len(lines)} archived issue(s) from {bucket}{note}")
+            if not remaining:
+                del self._last_deleted_by_repo[repo_key]
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to undo delete: {exc}")
+
+    def _empty_archive(self) -> None:
+        archive_path = self._archive_path()
+        if not archive_path.exists():
+            self._log("[info] Archive already empty.")
+            return
+        confirm = messagebox.askyesno("Empty archive", "Clear all archived issues?")
+        if not confirm:
+            return
+        try:
+            archive_path.write_text("# Archived issues\n", encoding="utf-8")
+            self._log(f"[ok] Cleared archive at {archive_path}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to clear archive: {exc}")
 
     def _mark_any_pending(self) -> None:
         entries = self._collect_selected_entries()
@@ -1445,6 +1834,8 @@ class VoiceGUI:
             return
         targets = {idx for idx_list, _ in entries for idx in idx_list}
         try:
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, f"move to {label}")
             lines = self._sanitize_issues_file()
             new_lines = []
             for i, line in enumerate(lines):
@@ -1464,7 +1855,7 @@ class VoiceGUI:
     @staticmethod
     def _set_issue_state(line: str, state_char: str) -> str:
         trailing_newline = "\n" if line.endswith("\n") else ""
-        normalized = re.sub(r"^(\s*[-*]\s*\[)[^\]](\])", rf"\1{state_char}\2", line.rstrip("\n"))
+        normalized = re.sub(r"^(\s*[-*]\s*\[)[^\]]+(\])", rf"\1{state_char}\2", line.rstrip("\n"))
         normalized = normalized.rstrip()
         if state_char.lower() == "x":
             normalized = VoiceGUI._append_done_timestamp(normalized)
@@ -1564,10 +1955,9 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Invalid paths: {exc}")
             return
-        issues_path = repo_path / ".voice" / "voice-issues.md"
+        issues_path = ConfigLoader.default_issues_path(repo_path)
         self.issues_path_var.set(str(issues_path))
-        self._ensure_repo_voice_assets(repo_path, issues_path)
-        self._record_repo_history(repo_path)
+        self._prepare_repo_selection(repo_path, issues_path, force=True)
         if self.config:
             alias = ConfigLoader.alias_for_path(
                 self.config.repos, self.config.repo_root, repo_path
@@ -1612,7 +2002,7 @@ class VoiceGUI:
                 repo_path = repo_path.resolve()
             except Exception:
                 pass
-            candidate = repo_path / ".voice" / "voice-issues.md"
+            candidate = ConfigLoader.default_issues_path(repo_path)
             try:
                 resolved = candidate.resolve()
             except Exception:
@@ -1621,6 +2011,7 @@ class VoiceGUI:
             if self.issues_path_var.get() != new_path:
                 self.issues_path_var.set(new_path)
             self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=Path(new_path))
+            self._prepare_repo_selection(repo_path, Path(new_path))
             self._refresh_static_info()
             self._refresh_issue_list()
         finally:
@@ -1703,6 +2094,55 @@ class VoiceGUI:
             combo_values = [current] + [v for v in values if v != current]
         combo["values"] = combo_values
 
+    def _copy_voice_asset(self, source: Path, target: Path) -> None:
+        if not source.exists():
+            return
+        try:
+            if target.exists() and target.read_bytes() == source.read_bytes():
+                return
+        except Exception:
+            pass
+        shutil.copy(source, target)
+
+    def _ensure_repo_gitignore(self, repo_path: Path) -> None:
+        if repo_path.resolve() != ROOT.resolve():
+            return
+        try:
+            added = ensure_gitignore_rules(repo_path, GITIGNORE_RULES_PATH)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to update .gitignore in {repo_path}: {exc}")
+            return
+        if added:
+            self._log(f"[info] Added {len(added)} gitignore rule(s) in {repo_path}")
+
+    def _ensure_voiceissues_gitignore(self, issues_dir: Path) -> None:
+        try:
+            updated = ensure_local_gitignore(issues_dir, VOICEISSUES_GITIGNORE_SOURCE)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to update voiceissues gitignore in {issues_dir}: {exc}")
+            return
+        if updated:
+            self._log(f"[info] Updated voiceissues .gitignore in {issues_dir}")
+
+    def _prepare_repo_selection(self, repo_path: Path, issues_path: Path, force: bool = False) -> None:
+        if not repo_path.exists() or not repo_path.is_dir():
+            return
+        if not force:
+            has_voiceissues = (repo_path / ConfigLoader.VOICEISSUES_DIR).exists()
+            has_legacy = (repo_path / ConfigLoader.LEGACY_VOICE_DIR).exists()
+            if not (repo_path / ".git").exists() and not has_voiceissues and not has_legacy:
+                return
+        try:
+            resolved = repo_path.resolve()
+        except Exception:
+            resolved = repo_path
+        if not force and self._last_repo_prepared and resolved == self._last_repo_prepared:
+            return
+        self._record_repo_history(repo_path)
+        self._ensure_repo_voice_assets(repo_path, issues_path)
+        self._ensure_repo_gitignore(repo_path)
+        self._last_repo_prepared = resolved
+
     def _ensure_repo_voice_assets(self, repo_path: Path, issues_path: Path) -> None:
         try:
             issues_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1710,16 +2150,23 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to prepare issues file at {issues_path}: {exc}")
         try:
-            voice_dir = repo_path / ".voice"
-            voice_dir.mkdir(parents=True, exist_ok=True)
-            if AGENT_VOICE_SOURCE.exists():
-                target = voice_dir / AGENT_VOICE_SOURCE.name
-                if not target.exists():
-                    shutil.copy(AGENT_VOICE_SOURCE, target)
-            if VOICE_WORKFLOW_SOURCE.exists():
-                workflow_target = voice_dir / VOICE_WORKFLOW_SOURCE.name
-                if not workflow_target.exists():
-                    shutil.copy(VOICE_WORKFLOW_SOURCE, workflow_target)
+            issues_dir = issues_path.parent
+            issues_dir.mkdir(parents=True, exist_ok=True)
+            if issues_dir.name == ConfigLoader.VOICEISSUES_DIR:
+                if VOICEISSUES_AGENT_SOURCE.exists():
+                    agent_target = issues_dir / VOICEISSUES_AGENT_SOURCE.name
+                    self._copy_voice_asset(VOICEISSUES_AGENT_SOURCE, agent_target)
+                if VOICEISSUES_WORKFLOW_SOURCE.exists():
+                    workflow_target = issues_dir / "VOICE_ISSUE_WORKFLOW.md"
+                    self._copy_voice_asset(VOICEISSUES_WORKFLOW_SOURCE, workflow_target)
+                self._ensure_voiceissues_gitignore(issues_dir)
+            elif issues_dir.name == ConfigLoader.LEGACY_VOICE_DIR:
+                if AGENT_VOICE_SOURCE.exists():
+                    target = issues_dir / AGENT_VOICE_SOURCE.name
+                    self._copy_voice_asset(AGENT_VOICE_SOURCE, target)
+                if VOICE_WORKFLOW_SOURCE.exists():
+                    workflow_target = issues_dir / VOICE_WORKFLOW_SOURCE.name
+                    self._copy_voice_asset(VOICE_WORKFLOW_SOURCE, workflow_target)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to copy voice guidance into {repo_path}: {exc}")
 
@@ -1775,7 +2222,8 @@ class VoiceGUI:
 
     @staticmethod
     def _is_pending_state(state: str) -> bool:
-        return state.strip().lower() == "[ ]"
+        state_norm = state.strip().lower()
+        return state_norm in ("[ ]", "[working on]", "[working]", "[in progress]", "[wip]")
 
     @staticmethod
     def _deduplicate_issues(issues: list[str]) -> list[str]:
@@ -1818,6 +2266,8 @@ class VoiceGUI:
             )
             if not confirm:
                 return
+            current_text = self.repo_cfg.issues_file.read_text(encoding="utf-8")
+            self._push_undo_state(self.repo_cfg.repo_path, current_text, "remove duplicates")
             self._write_issue_entries(unique_entries)
             self._refresh_issue_list()
             self._log(f"[ok] Removed {duplicates} duplicate issue(s) from {self.repo_cfg.issues_file}")
@@ -1830,11 +2280,12 @@ class VoiceGUI:
         if combo:
             combo["values"] = [f"{d['id']}: {d['name']}" for d in self.device_list]
         if self.device_list:
-            if combo:
-                combo.current(0)
-            self.selected_device_id = self.device_list[0]["id"]
-            self.selected_device_name = self.device_list[0]["name"]
-            self.selected_device_hostapi = self.device_list[0].get("hostapi")
+            self._select_device_from_config()
+            if combo and self.selected_device_id is not None:
+                for idx, dev in enumerate(self.device_list):
+                    if dev["id"] == self.selected_device_id:
+                        combo.current(idx)
+                        break
             self._log("[info] Devices refreshed.")
         else:
             self.selected_device_id = None
@@ -1858,9 +2309,40 @@ class VoiceGUI:
                     self.selected_device_hostapi = d.get("hostapi")
                     break
             self._log(f"[info] Selected device {sel}")
+            self._persist_last_device(self.selected_device_name)
             if self.mic_tester.is_testing():
                 self.mic_tester.stop()
                 self._log("[info] Mic test stopped; re-run on the new device.")
+
+    def _select_device_from_config(self) -> None:
+        if not self.device_list:
+            return
+        preferred = self.config.device_last_selected
+        if preferred:
+            for dev in self.device_list:
+                if dev.get("name", "").lower() == preferred.lower():
+                    self._set_selected_device(dev)
+                    return
+        self._set_selected_device(self.device_list[0])
+
+    def _set_selected_device(self, device: dict) -> None:
+        self.selected_device_id = device.get("id")
+        self.selected_device_name = device.get("name", "None")
+        self.selected_device_hostapi = device.get("hostapi")
+
+    def _persist_last_device(self, device_name: str) -> None:
+        try:
+            data = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Unable to persist device selection: {exc}")
+            return
+        devices = data.setdefault("devices", {})
+        devices["lastSelected"] = device_name
+        try:
+            DEFAULT_CONFIG_PATH.write_text(json.dumps(data, indent=4), encoding="utf-8")
+            self.config = ConfigLoader.load(DEFAULT_CONFIG_PATH)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Unable to persist device selection: {exc}")
 
     def start_recording(self) -> None:
         if self.mic_tester.is_testing():
@@ -2047,6 +2529,7 @@ class VoiceGUI:
                                     self.selected_device_id = dev_id
                                     self.selected_device_name = dev_name
                                     self.selected_device_hostapi = dev_hostapi
+                                    self._persist_last_device(dev_name)
                                     # If not already in the dropdown, add it.
                                     if all(d.get("id") != dev_id for d in self.device_list):
                                         self.device_list.append(

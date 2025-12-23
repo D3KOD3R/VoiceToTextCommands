@@ -37,8 +37,9 @@ Use the following pending/waitlist issues from @$ISSUES_FILE as your task list:
 $pending_entries
 
 For each issue you address:
+1) Before starting, change its checkbox to [working on] so the UI shows progress.
 1) Update the codebase accordingly.
-2) Edit @$ISSUES_FILE and change its checkbox from [ ] to [x], adding a short note like 'fixed in file X'.
+2) Edit @$ISSUES_FILE and change its checkbox to [x], adding a short note like 'fixed in file X'.
 3) After the user confirms the fix is acceptable, delete the resolved item from @$ISSUES_FILE (do not delete without confirmation).
 
 Do not tick issues you haven't actually worked on.
