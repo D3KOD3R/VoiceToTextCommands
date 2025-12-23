@@ -74,6 +74,8 @@ class ConfigLoader:
     """Utility helpers for working with the repo-local config."""
 
     LOCAL_ALIAS_BASE = "local"
+    LEGACY_VOICE_DIR = ".voice"
+    VOICEISSUES_DIR = "voiceissues"
 
     @staticmethod
     def load(path: Path = DEFAULT_CONFIG_PATH) -> VoiceConfig:
@@ -121,7 +123,7 @@ class ConfigLoader:
             return ConfigLoader._build_repo_config(local_alias, config.repos[local_alias], repo_root)
 
         if repo_path:
-            issues_file = (repo_path / ".voice" / "voice-issues.md").resolve()
+            issues_file = ConfigLoader.default_issues_path(repo_path)
             return RepoConfig(repo_path=repo_path, issues_file=issues_file)
 
         raise ValueError(f"Config for repo '{repo_key}' is missing or incomplete.")
@@ -143,6 +145,16 @@ class ConfigLoader:
             "path": ConfigLoader._path_for_storage(repo_root, repo_path),
             "issuesFile": ConfigLoader._issues_for_storage(repo_path, issues_path),
         }
+
+    @staticmethod
+    def default_issues_path(repo_path: Path) -> Path:
+        voiceissues = (repo_path / ConfigLoader.VOICEISSUES_DIR / "voice-issues.md").resolve()
+        legacy = (repo_path / ConfigLoader.LEGACY_VOICE_DIR / "voice-issues.md").resolve()
+        if voiceissues.exists():
+            return voiceissues
+        if legacy.exists():
+            return legacy
+        return voiceissues
 
     @staticmethod
     def _migrate_config(data: dict, repo_root: Path) -> bool:
@@ -225,7 +237,7 @@ class ConfigLoader:
 
     @staticmethod
     def _resolve_entry_issues(entry: dict, repo_path: Path) -> Path:
-        raw = entry.get("issuesFile") or ".voice/voice-issues.md"
+        raw = entry.get("issuesFile") or f"{ConfigLoader.VOICEISSUES_DIR}/voice-issues.md"
         candidate = Path(raw).expanduser()
         if not candidate.is_absolute():
             candidate = (repo_path / candidate).resolve()

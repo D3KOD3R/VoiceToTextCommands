@@ -2,7 +2,7 @@
   "repos": {
     "local": {
       "path": ".",
-      "issuesFile": ".voice/voice-issues.md"
+      "issuesFile": "voiceissues/voice-issues.md"
     }
   },
   "defaultRepo": "local",

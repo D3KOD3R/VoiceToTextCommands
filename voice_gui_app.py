@@ -8,7 +8,7 @@ Features:
 - Start/stop recording with buttons
 - Live input level meter while recording
 - Transcribe with whisper.cpp using paths from .voice_config.json (repo-local)
-- Append each detected issue immediately to .voice/voice-issues.md
+- Append each detected issue immediately to the configured issues file (defaults to voiceissues/voice-issues.md for new repos)
 
 Run:
   python voice_gui.py
@@ -48,6 +48,10 @@ ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
 AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
 VOICE_WORKFLOW_SOURCE = ROOT / "VOICE_ISSUE_WORKFLOW.md"
+GITIGNORE_RULES_PATH = ROOT / "config" / "gitignore_rules.json"
+VOICEISSUES_AGENT_SOURCE = ROOT / "agents" / "VoiceIssuesAgent.md"
+VOICEISSUES_WORKFLOW_SOURCE = ROOT / "config" / "voiceissues_workflow.md"
+VOICEISSUES_GITIGNORE_SOURCE = ROOT / "config" / "voiceissues_gitignore.txt"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
 LOG_PATH = ROOT / ".tmp" / "voice_gui.log"
@@ -55,6 +59,7 @@ LOG_LOCK = threading.Lock()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from voice_app.gitignore import ensure_gitignore_rules, ensure_local_gitignore
 from voice_issue_daemon import (
     ConfigLoader,
     DEFAULT_CONFIG_PATH,
@@ -503,6 +508,7 @@ class VoiceGUI:
         self.device_combo: ttk.Combobox | None = None
         self.repo_combo: ttk.Combobox | None = None
         self.repo_history: list[str] = self._load_repo_history()
+        self._last_repo_prepared: Path | None = None
         self.dark_mode_var = BooleanVar(value=False)
         self.dark_mode_icon_var = StringVar(value="🌙")
         self.dark_mode_text_var = StringVar(value="Dark mode")
@@ -1564,10 +1570,9 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[error] Invalid paths: {exc}")
             return
-        issues_path = repo_path / ".voice" / "voice-issues.md"
+        issues_path = ConfigLoader.default_issues_path(repo_path)
         self.issues_path_var.set(str(issues_path))
-        self._ensure_repo_voice_assets(repo_path, issues_path)
-        self._record_repo_history(repo_path)
+        self._prepare_repo_selection(repo_path, issues_path, force=True)
         if self.config:
             alias = ConfigLoader.alias_for_path(
                 self.config.repos, self.config.repo_root, repo_path
@@ -1612,7 +1617,7 @@ class VoiceGUI:
                 repo_path = repo_path.resolve()
             except Exception:
                 pass
-            candidate = repo_path / ".voice" / "voice-issues.md"
+            candidate = ConfigLoader.default_issues_path(repo_path)
             try:
                 resolved = candidate.resolve()
             except Exception:
@@ -1621,6 +1626,7 @@ class VoiceGUI:
             if self.issues_path_var.get() != new_path:
                 self.issues_path_var.set(new_path)
             self.repo_cfg = RepoConfig(repo_path=repo_path, issues_file=Path(new_path))
+            self._prepare_repo_selection(repo_path, Path(new_path))
             self._refresh_static_info()
             self._refresh_issue_list()
         finally:
@@ -1703,6 +1709,55 @@ class VoiceGUI:
             combo_values = [current] + [v for v in values if v != current]
         combo["values"] = combo_values
 
+    def _copy_voice_asset(self, source: Path, target: Path) -> None:
+        if not source.exists():
+            return
+        try:
+            if target.exists() and target.read_bytes() == source.read_bytes():
+                return
+        except Exception:
+            pass
+        shutil.copy(source, target)
+
+    def _ensure_repo_gitignore(self, repo_path: Path) -> None:
+        if repo_path.resolve() != ROOT.resolve():
+            return
+        try:
+            added = ensure_gitignore_rules(repo_path, GITIGNORE_RULES_PATH)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to update .gitignore in {repo_path}: {exc}")
+            return
+        if added:
+            self._log(f"[info] Added {len(added)} gitignore rule(s) in {repo_path}")
+
+    def _ensure_voiceissues_gitignore(self, issues_dir: Path) -> None:
+        try:
+            updated = ensure_local_gitignore(issues_dir, VOICEISSUES_GITIGNORE_SOURCE)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[warn] Failed to update voiceissues gitignore in {issues_dir}: {exc}")
+            return
+        if updated:
+            self._log(f"[info] Updated voiceissues .gitignore in {issues_dir}")
+
+    def _prepare_repo_selection(self, repo_path: Path, issues_path: Path, force: bool = False) -> None:
+        if not repo_path.exists() or not repo_path.is_dir():
+            return
+        if not force:
+            has_voiceissues = (repo_path / ConfigLoader.VOICEISSUES_DIR).exists()
+            has_legacy = (repo_path / ConfigLoader.LEGACY_VOICE_DIR).exists()
+            if not (repo_path / ".git").exists() and not has_voiceissues and not has_legacy:
+                return
+        try:
+            resolved = repo_path.resolve()
+        except Exception:
+            resolved = repo_path
+        if not force and self._last_repo_prepared and resolved == self._last_repo_prepared:
+            return
+        self._record_repo_history(repo_path)
+        self._ensure_repo_voice_assets(repo_path, issues_path)
+        self._ensure_repo_gitignore(repo_path)
+        self._last_repo_prepared = resolved
+
     def _ensure_repo_voice_assets(self, repo_path: Path, issues_path: Path) -> None:
         try:
             issues_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1710,16 +1765,23 @@ class VoiceGUI:
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to prepare issues file at {issues_path}: {exc}")
         try:
-            voice_dir = repo_path / ".voice"
-            voice_dir.mkdir(parents=True, exist_ok=True)
-            if AGENT_VOICE_SOURCE.exists():
-                target = voice_dir / AGENT_VOICE_SOURCE.name
-                if not target.exists():
-                    shutil.copy(AGENT_VOICE_SOURCE, target)
-            if VOICE_WORKFLOW_SOURCE.exists():
-                workflow_target = voice_dir / VOICE_WORKFLOW_SOURCE.name
-                if not workflow_target.exists():
-                    shutil.copy(VOICE_WORKFLOW_SOURCE, workflow_target)
+            issues_dir = issues_path.parent
+            issues_dir.mkdir(parents=True, exist_ok=True)
+            if issues_dir.name == ConfigLoader.VOICEISSUES_DIR:
+                if VOICEISSUES_AGENT_SOURCE.exists():
+                    agent_target = issues_dir / VOICEISSUES_AGENT_SOURCE.name
+                    self._copy_voice_asset(VOICEISSUES_AGENT_SOURCE, agent_target)
+                if VOICEISSUES_WORKFLOW_SOURCE.exists():
+                    workflow_target = issues_dir / "VOICE_ISSUE_WORKFLOW.md"
+                    self._copy_voice_asset(VOICEISSUES_WORKFLOW_SOURCE, workflow_target)
+                self._ensure_voiceissues_gitignore(issues_dir)
+            elif issues_dir.name == ConfigLoader.LEGACY_VOICE_DIR:
+                if AGENT_VOICE_SOURCE.exists():
+                    target = issues_dir / AGENT_VOICE_SOURCE.name
+                    self._copy_voice_asset(AGENT_VOICE_SOURCE, target)
+                if VOICE_WORKFLOW_SOURCE.exists():
+                    workflow_target = issues_dir / VOICE_WORKFLOW_SOURCE.name
+                    self._copy_voice_asset(VOICE_WORKFLOW_SOURCE, workflow_target)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to copy voice guidance into {repo_path}: {exc}")
 

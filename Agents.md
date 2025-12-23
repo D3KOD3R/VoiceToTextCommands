@@ -8,10 +8,12 @@ Order of consultation:
 2) `agents/AgentUx.md` — user experience
 3) `agents/AgentInstall.md` — installation & packaging
 4) `agents/AgentConfig.md` — configuration defaults & migration
-5) `agents/AgentPersistence.md` — persistence & safety
-6) `agents/AgentCode.md` — code style & dependencies
-7) `agents/AgentUi.md` — desktop UI specifics
-8) `agents/AgentTest.md` — testing & verification
-9) `agents/AgentFeatures.md` — features catalog
-10) `agents/AgentBug.md` — bug/issue tracking workflow
-11) `agents/MergeAgent.md` — merge/review guidance
+5) `agents/AgentPersistence.md` - persistence & safety
+6) `agents/AgentGitRules.md` - gitignore rules for local artifacts
+7) `agents/AgentCode.md` - code style & dependencies
+8) `agents/AgentUi.md` - desktop UI specifics
+9) `agents/AgentTest.md` - testing & verification
+10) `agents/AgentTestAutomation.md` - automated smoke tests
+11) `agents/AgentFeatures.md` - features catalog
+12) `agents/AgentBug.md` - bug/issue tracking workflow
+13) `agents/MergeAgent.md` - merge/review guidance
