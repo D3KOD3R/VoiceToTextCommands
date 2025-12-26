@@ -45,6 +45,30 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
    - Bash: `./codex_review_issues.sh`
    Codex will use the repo's issues file as its task list, apply fixes, and tick items with notes.
 
+## Voice issues workflow
+
+### Key files
+- `.voice/voice-issues.md` is the canonical backlog for this repo (legacy location; Copied when `voiceissues/` is not present).
+- `voiceissues/voice-issues.md` lives inside repo-local `voiceissues/` folders when this repo opts into the newer layout.
+- `voice_issue_daemon.py` and `voice_hotkey_daemon.py` capture speech, segment it on the configured `nextIssue`/`stop` phrases, and append to the issues file immediately.
+- `.voice_config.json` (from `.voice_config.sample.json`) keeps the repo list, STT settings, hotkeys, and realtime endpoints in one place.
+- `codex_review_issues.ps1` / `codex_review_issues.sh` run `codex --full-auto` against the repo-local checklist by following the rules in `agents/VoiceIssuesAgent.md`.
+- `RepoPointer.md.txt` references the default remote used by `sync_github_issues.py` and `codex_review_issues` helpers.
+- This README plus `agents/VoiceIssuesAgent.md` are the canonical workflow references.
+
+### Capturing issues by voice
+- Dry-run the daemon without a microphone by passing `--text`; e.g., `python voice_issue_daemon.py --text "first issue next issue second issue end issues"`.
+- For real recordings, provide the whisper.cpp binary/model via `.voice_config.json` and run `python voice_issue_daemon.py --provider whisper_cpp --audio-file sample.wav`.
+- "next issue" inserts a new bullet; "end issues" stops ingestion; every non-empty issue becomes `- [ ] ...` in the active issues file.
+- While speaking, say `load repo <alias>` to switch the default repo; the daemon updates `defaultRepo`, logs the change to `.voice/repo_history.json`, and the next issues land in the newly selected repo.
+- The stream writes issues as it hears them so the backlog reflects pending thoughts even before the recording finishes.
+
+### Reviewing issues with Codex
+- Both helper scripts resolve the issues file via `.voice_config.json` (or the `RepoPointer` remote) so you can run them from any repo without fuss.
+- They first ensure the backlog file exists, then invoke `codex --full-auto` with the checklist as the task list; the prompts instruct Codex to mark each entry `[working on]` before editing and `[x]` once fixed.
+- When updates land in the codebase, reopen the issues file to catch any newly added entries and continue until nothing is left unchecked.
+- Acceptance can happen in trust mode (fix+tick in one run) or the two-step mode (propose completions for confirmation before ticking); see `agents/VoiceIssuesAgent.md` for the exact process the agent follows.
+
 ## Keyboard shortcuts
 - `Delete` removes the current selection from the focused bucket (pending/done/waitlist).
 - `Ctrl+D` removes the current selection from the focused bucket (matches "Delete selected").
@@ -65,6 +89,8 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
   `docker build -f Dockerfile.speech-server -t voice-transcript-server .`  
   `docker run --rm -p 8000:8000 voice-transcript-server`
 - Configure the GUI to listen/post in `.voice_config.json` (defaults are `ws://localhost:8000/ws` and `http://localhost:8000/transcript` under `"realtime"`).
+- The log block now includes a "Start realtime server" toggle so the app can host `speech_server` in-process (it caps the backlog to 50 entries and shuts down cleanly when you stop it).
+- Real-time transcripts stream directly into the pending issues bucket and are appended to the repo's issues file as they arrive, so spoken issues appear live in the UI even before the recording stops.
 - The GUI speech output window will show any transcript strings posted to `/transcript`; it reconnects automatically if the server restarts.
 
 ## Files
@@ -73,8 +99,7 @@ Repo-aware voice issue recorder plus Codex bridge with local STT via whisper.cpp
 - `voice_hotkey_daemon.py` — desktop hotkey recorder (mic → whisper.cpp → issues file).
 - `.voice_config.sample.json` — config template for repos/phrases/STT (copy to `.voice_config.json`).
 - `codex_review_issues.ps1` / `codex_review_issues.sh` - run Codex against the checklist.
-- `VOICE_ISSUE_WORKFLOW.md` - fuller workflow and options.
-- `agents/VoiceIssuesAgent.md` / `config/voiceissues_workflow.md` - templates seeded into `voiceissues/`.
+- `agents/VoiceIssuesAgent.md` - guidance seeded into `voiceissues/` so Codex copies the same agent doc.
 - `requirements.txt` - Python deps for hotkey/mic capture.
 
 ## Tips

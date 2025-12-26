@@ -3,8 +3,7 @@
     ".tmp/",
     ".voice/repo_history.json",
     ".voice/past_repos.md",
-    ".voice/AgentVoice.md",
-    ".voice/VOICE_ISSUE_WORKFLOW.md"
+    ".voice/VoiceIssuesAgent.md"
   ],
   "description": "Per-user, auto-generated artifacts produced by the Voice Issue Recorder."
 }

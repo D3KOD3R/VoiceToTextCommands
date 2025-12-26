@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-ISSUES_FILE=".voice/voice-issues.md"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+ISSUES_FILE="$(python "$ROOT/scripts/resolve_voice_issues.py" "$@")"
+
+if [ -z "$ISSUES_FILE" ]; then
+  echo "Failed to resolve the voice issues file (check .voice_config.json)." >&2
+  exit 1
+fi
 
 if [ ! -f "$ISSUES_FILE" ]; then
   echo "No voice issues file found at $ISSUES_FILE"
@@ -38,9 +44,9 @@ $pending_entries
 
 For each issue you address:
 1) Before starting, change its checkbox to [working on] so the UI shows progress.
-1) Update the codebase accordingly.
-2) Edit @$ISSUES_FILE and change its checkbox to [x], adding a short note like 'fixed in file X'.
-3) After the user confirms the fix is acceptable, delete the resolved item from @$ISSUES_FILE (do not delete without confirmation).
+2) Update the codebase accordingly.
+3) Edit @$ISSUES_FILE and change its checkbox to [x], adding a short note like 'fixed in file X'.
+4) After the user confirms the fix is acceptable, delete the resolved item from @$ISSUES_FILE (do not delete without confirmation).
 
 Do not tick issues you haven't actually worked on.
 EOF

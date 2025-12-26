@@ -1,5 +1,4 @@
 # Local voiceissues artifacts
 *
 !.gitignore
-!VOICE_ISSUE_WORKFLOW.md
 !VoiceIssuesAgent.md

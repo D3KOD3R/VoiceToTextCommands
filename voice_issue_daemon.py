@@ -8,6 +8,8 @@ and writes/updates the Markdown backlog file used by Codex.
 This skeleton focuses on file handling and parsing. Replace `SpeechToTextStub`
 with a concrete STT provider (e.g., Whisper) and wire a global hotkey using
 `keyboard` or your preferred library.
+It also recognizes “load repo <alias>” voice commands to switch the default
+repository before emitting new issues.
 """
 
 from __future__ import annotations
@@ -22,10 +24,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from voice_app.config import ConfigLoader, DEFAULT_CONFIG_PATH, RepoConfig
+from voice_app.config import ConfigLoader, DEFAULT_CONFIG_PATH, RepoConfig, VoiceConfig
 
 DEFAULT_HEADER_TITLE = "Voice Issues"
 ISSUE_NUMBER_PATTERN = re.compile(r"\bissue\s+(?:number\s+)?(\d+)\b", re.IGNORECASE)
+LOAD_REPO_PATTERN = re.compile(r"\bload\s+repo\s+([a-z0-9_.\-\s]+)", re.IGNORECASE)
+REPO_HISTORY_LIMIT = 12
 
 class IssueWriter:
     def __init__(self, issues_file: Path):
@@ -79,6 +83,66 @@ def split_issues(text: str, next_phrases: List[str], stop_phrases: List[str]) ->
     parts = re.split(pattern, text, flags=re.IGNORECASE) if pattern else [text]
     issues = [part.strip(" .;-") for part in parts if part and part.strip(" .;-")]
     return issues
+
+
+def _normalize_candidate(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _match_repo_alias(config: VoiceConfig, candidate: str) -> str | None:
+    normalized = _normalize_candidate(candidate)
+    for alias in config.repos:
+        if _normalize_candidate(alias) == normalized:
+            return alias
+        entry = config.repos[alias]
+        try:
+            resolved = ConfigLoader._resolve_entry_path(alias, entry, config.repo_root)
+            if _normalize_candidate(resolved.name) == normalized:
+                return alias
+        except Exception:
+            continue
+    try:
+        candidate_path = Path(candidate).expanduser()
+        if not candidate_path.is_absolute():
+            candidate_path = (config.repo_root / candidate_path).resolve()
+        alias = ConfigLoader._find_alias_by_path(config.repos, candidate_path, config.repo_root)
+        if alias:
+            return alias
+    except Exception:
+        pass
+    return None
+
+
+def _extract_load_repo_command(text: str) -> tuple[str | None, str]:
+    match = LOAD_REPO_PATTERN.search(text)
+    if not match:
+        return None, text
+    cleaned = f"{text[:match.start()].strip()} {text[match.end():].strip()}".strip()
+    return match.group(1), cleaned
+
+
+def _update_default_repo(config_path: Path, alias: str) -> None:
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        data = {}
+    if data.get("defaultRepo") == alias:
+        return
+    data["defaultRepo"] = alias
+    config_path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8")
+
+
+def _record_repo_history(repo_path: Path, config_path: Path) -> None:
+    history_path = config_path.resolve().parent / ".voice" / "repo_history.json"
+    try:
+        existing = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
+    except Exception:
+        existing = {}
+    history = existing.get("history", [])
+    str_path = str(repo_path)
+    updated = [str_path] + [p for p in history if p != str_path]
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_text(json.dumps({"history": updated[:REPO_HISTORY_LIMIT]}, indent=2) + "\n", encoding="utf-8")
 
 
 class SpeechToTextStub:
@@ -253,6 +317,25 @@ def main() -> int:
     else:
         stt = SpeechToTextStub()
         transcript = stt.record_and_transcribe()
+    alias_candidate, cleaned = _extract_load_repo_command(transcript)
+    if alias_candidate:
+        alias_candidate = alias_candidate.strip()
+        canonical_alias = _match_repo_alias(config, alias_candidate)
+        if canonical_alias:
+            try:
+                _update_default_repo(args.config, canonical_alias)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] Failed to update default repo: {exc}", file=sys.stderr)
+            config.default_repo = canonical_alias
+            repo_cfg = ConfigLoader.select_repo(config, canonical_alias)
+            try:
+                _record_repo_history(repo_cfg.repo_path, args.config)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] Failed to update repo history: {exc}", file=sys.stderr)
+            transcript = cleaned
+            print(f"[ok] Load repo command switched to '{canonical_alias}' ({repo_cfg.repo_path})")
+        else:
+            print(f"[warn] Could not resolve repo alias '{alias_candidate}'", file=sys.stderr)
     issues = split_issues(transcript, config.next_issue_phrases, config.stop_phrases)
 
     if not issues:

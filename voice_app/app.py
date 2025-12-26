@@ -45,7 +45,7 @@ except Exception:  # noqa: BLE001
 # Ensure repo root is importable regardless of CWD
 ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
-AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
+AGENT_VOICE_SOURCE = ROOT / "agents" / "VoiceIssuesAgent.md"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
 if str(ROOT) not in sys.path:

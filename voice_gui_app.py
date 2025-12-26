@@ -17,6 +17,7 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import re
 import shutil
@@ -29,10 +30,12 @@ import urllib.error
 import urllib.request
 import wave
 import subprocess
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
-from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Label, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk, filedialog
+from urllib.parse import urlparse
+from tkinter import BOTH, DISABLED, END, LEFT, NORMAL, RIGHT, Canvas, Listbox, StringVar, BooleanVar, Tk, Toplevel, messagebox, ttk, filedialog
 from tkinter import scrolledtext
 
 import numpy as np
@@ -50,11 +53,9 @@ except Exception:  # noqa: BLE001
 # Ensure repo root is importable regardless of CWD
 ROOT = Path(__file__).resolve().parent
 REPO_HISTORY_PATH = ROOT / ".voice" / "repo_history.json"
-AGENT_VOICE_SOURCE = ROOT / "agents" / "AgentVoice.md"
-VOICE_WORKFLOW_SOURCE = ROOT / "VOICE_ISSUE_WORKFLOW.md"
+AGENT_VOICE_SOURCE = ROOT / "agents" / "VoiceIssuesAgent.md"
 GITIGNORE_RULES_PATH = ROOT / "config" / "gitignore_rules.json"
 VOICEISSUES_AGENT_SOURCE = ROOT / "agents" / "VoiceIssuesAgent.md"
-VOICEISSUES_WORKFLOW_SOURCE = ROOT / "config" / "voiceissues_workflow.md"
 VOICEISSUES_GITIGNORE_SOURCE = ROOT / "config" / "voiceissues_gitignore.txt"
 REPO_HISTORY_LIMIT = 12
 PAST_REPOS_MD = ROOT / ".voice" / "past_repos.md"
@@ -456,6 +457,62 @@ class TranscriptListener:
                 return
             self.on_log(f"[warn] Realtime disabled: {exc}")
             self._set_status("Realtime server not detected")
+
+
+class RealtimeServerHost:
+    """Background server that hosts speech_server.app via uvicorn."""
+
+    def __init__(self, host: str, port: int, on_log, on_status) -> None:
+        self.host = host
+        self.port = port
+        self.on_log = on_log
+        self.on_status = on_status
+        self._thread: threading.Thread | None = None
+        self._server: "uvicorn.Server" | None = None  # type: ignore[name-defined]
+        self._lock = threading.Lock()
+
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> bool:
+        with self._lock:
+            if self.running():
+                self.on_status("Realtime host already running")
+                return True
+            try:
+                speech_mod = importlib.import_module("speech_server")
+                import uvicorn  # type: ignore[import]
+            except Exception as exc:  # noqa: BLE001
+                self.on_status("Realtime host unavailable")
+                self.on_log(f"[warn] Unable to start realtime host: {exc}")
+                return False
+            config = uvicorn.Config(
+                speech_mod.app,
+                host=self.host,
+                port=self.port,
+                log_level="warning",
+                lifespan="on",
+            )
+            self._server = uvicorn.Server(config)
+            self._thread = threading.Thread(target=self._server.run, daemon=True)
+            self._thread.start()
+            self.on_status(f"Realtime host online ({self.host}:{self.port})")
+            self.on_log(f"[info] Started realtime server at {self.host}:{self.port}")
+            return True
+
+    def stop(self) -> bool:
+        with self._lock:
+            if not self.running() or not self._server:
+                self.on_status("Realtime host offline")
+                return False
+            self._server.should_exit = True
+            if self._thread:
+                self._thread.join(timeout=2)
+            self._thread = None
+            self._server = None
+            self.on_status("Realtime host stopped")
+            self.on_log("[info] Stopped realtime server")
+            return True
 class VoiceGUI:
     def __init__(self) -> None:
         self.config = ConfigLoader.load(DEFAULT_CONFIG_PATH)
@@ -478,7 +535,6 @@ class VoiceGUI:
         self.log_widget: scrolledtext.ScrolledText | None = None
         self.live_indicator: ttk.Label | None = None
         self.start_btn: ttk.Button | None = None
-        self.stop_btn: ttk.Button | None = None
         self.test_cta_btn: ttk.Button | None = None
         self.live_transcript_widget: scrolledtext.ScrolledText | None = None
         self.test_btn: ttk.Button | None = None
@@ -508,6 +564,8 @@ class VoiceGUI:
         self._toggle_target: tuple[Listbox, int] | None = None
         self.waterfall_status: ttk.Label | None = None
         self.transcript_listener: TranscriptListener | None = None
+        self.realtime_server_host: RealtimeServerHost | None = None
+        self.realtime_server_status_var = StringVar(value="Realtime host idle")
         self.hotkey_toggle_var = StringVar(value=self.config.hotkey_toggle)
         self.hotkey_quit_var = StringVar(value=self.config.hotkey_quit)
         self.realtime_status_var = StringVar(value="Realtime: unknown")
@@ -517,8 +575,8 @@ class VoiceGUI:
         self.repo_info_label: ttk.Label | None = None
         self.issues_info_label: ttk.Label | None = None
         self.hotkey_toggle_entry: ttk.Entry | None = None
-        self.hotkey_quit_entry: ttk.Entry | None = None
         self.issues_path_entry: ttk.Entry | None = None
+        self.realtime_server_button: ttk.Button | None = None
         self.device_combo: ttk.Combobox | None = None
         self.refresh_btn: ttk.Button | None = None
         self.repo_combo: ttk.Combobox | None = None
@@ -533,6 +591,7 @@ class VoiceGUI:
         self._repo_path_trace_guard = False
         self.repo_path_var.trace_add("write", self._on_repo_path_value_changed)
         self._on_repo_path_value_changed()
+        self._recent_realtime_texts: deque[str] = deque(maxlen=32)
 
         self._build_layout()
         self._update_theme()
@@ -542,6 +601,7 @@ class VoiceGUI:
         self._refresh_issue_list()
         self.root.after(750, self._poll_issue_file)
         self._start_transcript_listener()
+        self._update_realtime_server_button()
         self._cleanup_tmp_dir()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind_all("<Control-z>", self._handle_ctrl_z)
@@ -575,11 +635,7 @@ class VoiceGUI:
         log_frame = ttk.Frame(parent)
         log_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
         ttk.Label(log_frame, text="Log:").pack(anchor="w")
-        status_row = ttk.Frame(log_frame)
-        status_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(status_row, text="Realtime:").pack(side=LEFT)
-        ttk.Label(status_row, textvariable=self.realtime_status_var).pack(side=LEFT)
-        self.log_widget = scrolledtext.ScrolledText(log_frame, height=8, state=DISABLED)
+        self.log_widget = scrolledtext.ScrolledText(log_frame, height=12, state=DISABLED)
         self.log_widget.pack(fill=BOTH, expand=True, pady=(2, 0))
         self._log("Ready. Select mic, use 'Test Selected Mic' to monitor, then Start Recording.")
 
@@ -648,18 +704,20 @@ class VoiceGUI:
         columns = ttk.Frame(parent)
         columns.pack(fill=BOTH, expand=True, **pad)
         columns.columnconfigure(0, weight=1)
+        columns.columnconfigure(1, weight=1)
 
         left_col = ttk.Frame(columns)
         left_col.grid(row=0, column=0, sticky="nsew")
+        left_col.columnconfigure(0, weight=1)
+        controls_container = ttk.Frame(left_col, padding=(8, 6, 8, 6))
+        controls_container.grid(row=0, column=0, sticky="nsew")
+        controls_container.columnconfigure(0, weight=1)
 
-        hk_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
+        hk_row = ttk.Frame(controls_container, padding=(6, 2, 6, 2))
         hk_row.pack(fill=BOTH, **pad)
-        ttk.Label(hk_row, text="Hotkey toggle:").pack(side=LEFT, padx=(0, 6))
+        ttk.Label(hk_row, text="Record toggle:").pack(side=LEFT, padx=(0, 6))
         self.hotkey_toggle_entry = ttk.Entry(hk_row, textvariable=self.hotkey_toggle_var, width=16)
         self.hotkey_toggle_entry.pack(side=LEFT, padx=(0, 10))
-        ttk.Label(hk_row, text="Hotkey quit:").pack(side=LEFT, padx=(0, 6))
-        self.hotkey_quit_entry = ttk.Entry(hk_row, textvariable=self.hotkey_quit_var, width=16)
-        self.hotkey_quit_entry.pack(side=LEFT, padx=(0, 10))
 
         def bind_auto_apply(widget: ttk.Widget) -> None:
             widget.bind("<Return>", lambda _e: self._apply_settings())
@@ -667,10 +725,8 @@ class VoiceGUI:
 
         if self.hotkey_toggle_entry:
             bind_auto_apply(self.hotkey_toggle_entry)
-        if self.hotkey_quit_entry:
-            bind_auto_apply(self.hotkey_quit_entry)
 
-        path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
+        path_row = ttk.Frame(controls_container, padding=(6, 2, 6, 2))
         path_row.pack(fill=BOTH, **pad)
         ttk.Label(path_row, text="Repo path:").pack(side=LEFT, padx=(0, 6))
         repo_values = list(self.repo_history)
@@ -692,7 +748,7 @@ class VoiceGUI:
         ttk.Button(path_row, text="Browse...", width=8, command=self._browse_repo_path).pack(side=LEFT, padx=(0, 6))
         self._update_repo_combo_values(current_repo=self.repo_cfg.repo_path)
 
-        issue_path_row = ttk.Frame(left_col, padding=(6, 2, 6, 2))
+        issue_path_row = ttk.Frame(controls_container, padding=(6, 2, 6, 2))
         issue_path_row.pack(fill=BOTH, **pad)
         ttk.Label(issue_path_row, text="Issues file:").pack(side=LEFT, padx=(0, 6))
         self.issues_path_entry = ttk.Entry(issue_path_row, textvariable=self.issues_path_var, width=70)
@@ -700,7 +756,7 @@ class VoiceGUI:
         if self.issues_path_entry:
             bind_auto_apply(self.issues_path_entry)
 
-        device_row = ttk.Frame(left_col, padding=(2, 1, 2, 1))
+        device_row = ttk.Frame(controls_container, padding=(2, 1, 2, 1))
         device_row.pack(fill="x", expand=False, padx=8, pady=(0, 4))
         device_row.columnconfigure(0, weight=0)
         device_row.columnconfigure(1, weight=0)
@@ -732,17 +788,31 @@ class VoiceGUI:
         self.live_indicator = ttk.Label(device_row, text="Idle", foreground="white", background="#666666", padding=6)
         self.live_indicator.grid(row=0, column=4, sticky="e")
 
-        info_frame = ttk.Frame(left_col, padding=(6, 4, 6, 0))
-        info_frame.pack(fill="x", pady=(6, 0))
-        info_frame.columnconfigure(0, weight=1)
-        self.hotkey_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9, "bold"))
-        self.hotkey_info_label.grid(row=0, column=0, sticky="ew", pady=(0, 2))
-        self.repo_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
-        self.repo_info_label.grid(row=1, column=0, sticky="ew", pady=(0, 2))
-        self.issues_info_label = Label(info_frame, text="", anchor="w", justify=LEFT, font=("Segoe UI", 9))
-        self.issues_info_label.grid(row=2, column=0, sticky="ew")
-        self._refresh_static_info()
         self._update_theme()
+
+        record_row = ttk.Frame(controls_container, padding=(6, 10, 6, 4))
+        record_row.columnconfigure(0, weight=0)
+        record_row.pack(fill="x", pady=(6, 0))
+        self.start_btn = ttk.Button(
+            record_row,
+            text="Start Recording",
+            command=self._toggle_recording,
+            width=38,
+        )
+        self.start_btn.grid(row=0, column=0, sticky="w")
+        realtime_row = ttk.Frame(record_row)
+        realtime_row.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(realtime_row, text="Realtime:").pack(side=LEFT)
+        ttk.Label(realtime_row, textvariable=self.realtime_status_var).pack(side=LEFT, padx=(4, 14))
+        ttk.Label(realtime_row, text="Host:").pack(side=LEFT)
+        ttk.Label(realtime_row, textvariable=self.realtime_server_status_var).pack(side=LEFT, padx=(4, 0))
+        self.realtime_server_button = ttk.Button(
+            realtime_row,
+            text="Start realtime server",
+            command=self._toggle_realtime_server,
+            width=20,
+        )
+        self.realtime_server_button.pack(side=RIGHT)
 
     def _current_palette(self) -> dict[str, str]:
         return DARK_THEME if self.dark_mode_var.get() else LIGHT_THEME
@@ -845,20 +915,12 @@ class VoiceGUI:
 
     def _build_audio_panel(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
         wf_header = ttk.Frame(parent)
-        wf_header.pack(fill=BOTH, padx=pad["padx"], pady=(4, 0))
+        wf_header.pack(fill=BOTH, padx=(0, pad["padx"]), pady=(4, 0))
         ttk.Label(wf_header, text="Microphone waterfall").pack(side=LEFT)
         self.waterfall_status = ttk.Label(wf_header, text="Waterfall: idle")
         self.waterfall_status.pack(side=LEFT, padx=(8, 0))
-        self.test_canvas = Canvas(parent, height=260, bg="#1e1e1e", highlightthickness=0)
-        self.test_canvas.pack(fill=BOTH, expand=True, padx=pad["padx"], pady=(0, 5))
-
-    def _build_action_buttons(self, parent: ttk.Frame, pad: dict[str, int]) -> None:
-        btn_row = ttk.Frame(parent)
-        btn_row.pack(fill=BOTH, **pad)
-        self.start_btn = ttk.Button(btn_row, text="Start Recording", command=self.start_recording)
-        self.start_btn.pack(side=LEFT, expand=True, fill=BOTH, padx=(0, 5))
-        self.stop_btn = ttk.Button(btn_row, text="Stop & Transcribe", command=self.stop_recording, state=DISABLED)
-        self.stop_btn.pack(side=RIGHT, expand=True, fill=BOTH, padx=(5, 0))
+        self.test_canvas = Canvas(parent, height=420, bg="#1e1e1e", highlightthickness=0)
+        self.test_canvas.pack(fill=BOTH, expand=True, padx=(0, pad["padx"]), pady=(0, 5))
 
     def _build_issues_panel(self, parent: ttk.Frame) -> None:
         panel = ttk.Frame(parent, padding=(8, 0, 0, 0))
@@ -900,8 +962,86 @@ class VoiceGUI:
             pass
 
     def _handle_transcript_message(self, text: str) -> None:
-        # Live transcript pane is reserved for future playback; ignore incoming text.
-        return
+        if not text or not text.strip():
+            return
+        self.root.after(0, lambda payload=text: self._process_realtime_message(payload))
+
+    def _process_realtime_message(self, text: str) -> None:
+        stripped = text.strip()
+        if not stripped:
+            return
+        normalized = stripped.lower()
+        if normalized in self._recent_realtime_texts:
+            self._log("[info] Duplicate realtime segment skipped.")
+            return
+        self._recent_realtime_texts.append(normalized)
+        self._append_live_transcript(stripped)
+        self._log(f"[realtime] {stripped}")
+        issues = split_issues(stripped, self.config.next_issue_phrases, self.config.stop_phrases)
+        issues = self._deduplicate_issues(issues)
+        if not issues:
+            return
+        try:
+            writer = IssueWriter(self.repo_cfg.issues_file)
+            append_issues_incremental(writer, issues)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[error] Failed to append realtime issues: {exc}")
+            return
+        self._log(f"[ok] Appended {len(issues)} realtime issue(s) from stream.")
+        self._refresh_issue_list()
+
+    def _append_live_transcript(self, text: str) -> None:
+        if not self.live_transcript_widget:
+            return
+        self.live_transcript_widget.config(state=NORMAL)
+        self.live_transcript_widget.insert(END, text + "\n")
+        self.live_transcript_widget.see(END)
+        self.live_transcript_widget.config(state=DISABLED)
+
+    def _toggle_realtime_server(self) -> None:
+        if self.realtime_server_host and self.realtime_server_host.running():
+            self._stop_realtime_server()
+        else:
+            self._start_realtime_server()
+
+    def _start_realtime_server(self) -> None:
+        host, port = self._resolve_realtime_endpoint()
+        self.realtime_server_status_var.set(f"Starting {host}:{port}")
+
+        def log(msg: str) -> None:
+            self.root.after(0, lambda: self._log(msg))
+
+        def status(text: str) -> None:
+            self.root.after(0, lambda: self.realtime_server_status_var.set(text))
+
+        hoster = RealtimeServerHost(host, port, on_log=log, on_status=status)
+        started = hoster.start()
+        self.realtime_server_host = hoster if started else None
+        self._update_realtime_server_button()
+
+    def _stop_realtime_server(self) -> None:
+        if not self.realtime_server_host:
+            self._update_realtime_server_button()
+            return
+        stopped = self.realtime_server_host.stop()
+        self.realtime_server_host = None
+        if not stopped:
+            self.realtime_server_status_var.set("Realtime host offline")
+        self._update_realtime_server_button()
+
+    def _update_realtime_server_button(self) -> None:
+        if not self.realtime_server_button:
+            return
+        running = bool(self.realtime_server_host and self.realtime_server_host.running())
+        label = "Stop realtime server" if running else "Start realtime server"
+        self.realtime_server_button.config(text=label)
+
+    def _resolve_realtime_endpoint(self) -> tuple[str, int]:
+        candidate = self.config.realtime_post_url or self.config.realtime_ws_url or "http://localhost:8000/transcript"
+        parsed = urlparse(candidate)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 8000
+        return host, port
 
     def _start_transcript_listener(self) -> None:
         if not self.config.realtime_ws_url:
@@ -2156,17 +2296,11 @@ class VoiceGUI:
                 if VOICEISSUES_AGENT_SOURCE.exists():
                     agent_target = issues_dir / VOICEISSUES_AGENT_SOURCE.name
                     self._copy_voice_asset(VOICEISSUES_AGENT_SOURCE, agent_target)
-                if VOICEISSUES_WORKFLOW_SOURCE.exists():
-                    workflow_target = issues_dir / "VOICE_ISSUE_WORKFLOW.md"
-                    self._copy_voice_asset(VOICEISSUES_WORKFLOW_SOURCE, workflow_target)
                 self._ensure_voiceissues_gitignore(issues_dir)
             elif issues_dir.name == ConfigLoader.LEGACY_VOICE_DIR:
                 if AGENT_VOICE_SOURCE.exists():
                     target = issues_dir / AGENT_VOICE_SOURCE.name
                     self._copy_voice_asset(AGENT_VOICE_SOURCE, target)
-                if VOICE_WORKFLOW_SOURCE.exists():
-                    workflow_target = issues_dir / VOICE_WORKFLOW_SOURCE.name
-                    self._copy_voice_asset(VOICE_WORKFLOW_SOURCE, workflow_target)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[warn] Failed to copy voice guidance into {repo_path}: {exc}")
 
@@ -2348,6 +2482,8 @@ class VoiceGUI:
         if self.mic_tester.is_testing():
             self._log("[error] Stop mic test before recording.")
             return
+        if self.recorder and self.recorder.is_recording():
+            return
         if not self.selected_device_id and self.selected_device_id != 0:
             self._log("[error] No input device selected.")
             return
@@ -2360,12 +2496,7 @@ class VoiceGUI:
             self.tmp_wav = tmp_path
             self.waterfall_history = []
             self._start_recorder_with_fallbacks()
-            if self.start_btn:
-                self.start_btn.config(state=DISABLED)
-            if self.stop_btn:
-                self.stop_btn.config(state=NORMAL)
-            if self.status_var:
-                self.status_var.config(text="Recording...")
+            self._set_record_button_state(True)
             if self.live_indicator:
                 self.live_indicator.config(text="Mic LIVE", background="#c1121f", foreground="white")
             if self.hotkey_registered:
@@ -2378,6 +2509,7 @@ class VoiceGUI:
             self._remove_tmp_wav()
             self.recorder = None
             self.tmp_wav = None
+            self._set_record_button_state(False)
 
     def stop_recording(self) -> None:
         if not self.recorder or not self.recorder.is_recording():
@@ -2434,10 +2566,19 @@ class VoiceGUI:
             self.tmp_wav = None
             self.recorder = None
             self.waterfall_history = []
-            if self.start_btn:
-                self.start_btn.config(state=NORMAL)
-            if self.stop_btn:
-                self.stop_btn.config(state=DISABLED)
+            self._set_record_button_state(False)
+
+    def _set_record_button_state(self, recording: bool) -> None:
+        if not self.start_btn:
+            return
+        label = "Stop & Transcribe" if recording else "Start Recording"
+        self.start_btn.config(text=label)
+
+    def _toggle_recording(self) -> None:
+        if self.recorder and self.recorder.is_recording():
+            self.stop_recording()
+        else:
+            self.start_recording()
 
     def _start_recorder_with_fallbacks(self) -> None:
         # Find working sample rates via check_input_settings, then try to start with each (and channels fallback)

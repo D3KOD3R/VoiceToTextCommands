@@ -17,7 +17,6 @@ from voice_app.gitignore import ensure_local_gitignore
 from voice_issue_daemon import IssueWriter, append_issues_incremental, split_issues
 
 VOICEISSUES_AGENT_SOURCE = ROOT / "agents" / "VoiceIssuesAgent.md"
-VOICEISSUES_WORKFLOW_SOURCE = ROOT / "config" / "voiceissues_workflow.md"
 VOICEISSUES_GITIGNORE_SOURCE = ROOT / "config" / "voiceissues_gitignore.txt"
 
 
@@ -36,7 +35,6 @@ def _copy_if_needed(source: Path, target: Path) -> None:
 def _ensure_voiceissues_assets(issues_dir: Path) -> None:
     issues_dir.mkdir(parents=True, exist_ok=True)
     _copy_if_needed(VOICEISSUES_AGENT_SOURCE, issues_dir / "VoiceIssuesAgent.md")
-    _copy_if_needed(VOICEISSUES_WORKFLOW_SOURCE, issues_dir / "VOICE_ISSUE_WORKFLOW.md")
     ensure_local_gitignore(issues_dir, VOICEISSUES_GITIGNORE_SOURCE)
 
 

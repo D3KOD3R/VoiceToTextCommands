@@ -17,6 +17,7 @@ Docker (from repo root):
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from typing import Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -38,8 +39,8 @@ app.add_middleware(
 )
 
 clients: Set[WebSocket] = set()
-backlog: list[str] = []
 backlog_limit = 50
+backlog: deque[str] = deque(maxlen=backlog_limit)
 clients_lock = asyncio.Lock()
 
 
@@ -69,7 +70,6 @@ async def post_transcript(payload: TranscriptIn) -> dict:
     if not text:
         return {"status": "ignored", "reason": "empty"}
     backlog.append(text)
-    del backlog[:-backlog_limit]
     await broadcast(text)
     return {"status": "ok", "length": len(text)}
 

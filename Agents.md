@@ -1,10 +1,10 @@
 # Agents Overview
 
 This file is the entrypoint for guidance. It points to individual agent documents stored in the `agents/` folder. Consult them in order for consistent behavior. Do not skip any relevant agent;
-refer to the VOICE_ISSUE_WORKFLOW.md file when working through issues, if the user gives you a fix issues command. 
+refer to `README.md` and `agents/VoiceIssuesAgent.md` when working through issues, if the user gives you a fix issues command.
 
 Order of consultation:
-1) `agents/AgentVoice.md` — user voice notes from working on UI and feature tests
+1) `agents/VoiceIssuesAgent.md` - consolidated voice-issues backlog and workflow guidance
 2) `agents/AgentUx.md` — user experience
 3) `agents/AgentInstall.md` — installation & packaging
 4) `agents/AgentConfig.md` — configuration defaults & migration
